@@ -48,7 +48,8 @@ def _raw_core_fallback(content: str) -> str:
     return strip_wikilinks(content)[:300].strip() or "（空记忆）"
 
 
-async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -> str:
+async def surface_default(max_results: int, max_tokens: int, tag_filter: list,
+                          valence: float = -1, arousal: float = -1) -> str:
     try:
         all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
     except Exception as e:
@@ -304,4 +305,20 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
         parts.append("=== 久未浮现 ===\n" + "\n---\n".join(passive_results))
     if dream_results:
         parts.append("=== 偶然想起 ===\n" + "\n---\n".join(dream_results))
+
+    # --- Night-Fall auto-surface（path 0 兼容补丁）---
+    # 无 query 但带情绪上下文（valence/arousal 任一 != -1，即 is_contextual_noquery）
+    # 时，让 Night-Fall 把一枚到期的潜梦浮上来，参与 breath 的情绪共振。纯无参
+    # breath()（valence=arousal=-1）不触发——不消耗梦「被记起」的机会。
+    # 钩子由 server.py 的 register_night_fall 注入进 rt；未集成/未注册时为 None，跳过。
+    is_contextual_noquery = (valence != -1 or arousal != -1)
+    _night_fall_auto_surface = getattr(rt, "night_fall_auto_surface", None)
+    if is_contextual_noquery and _night_fall_auto_surface is not None:
+        try:
+            dream_block = await _night_fall_auto_surface()
+            if dream_block:
+                parts.append(dream_block)
+        except Exception as e:
+            rt.logger.warning(f"Auto-surface failed / 自动浮梦失败: {e}")
+
     return "\n\n".join(parts)

@@ -829,6 +829,35 @@ from web.oauth import _is_valid_mcp_token  # noqa: F401  (used by _MCPAuthMiddle
 from web.tunnel import _load_tunnel_config, _start_tunnel, _stop_tunnel  # noqa: F401
 
 
+# ============================================================
+# Night-Fall extension (path 0，library 集成)
+# ------------------------------------------------------------
+# 把 Night-Fall 作为**库**挂到本 server 上：注册 night_fall 工具 + 自动浮梦钩子。
+# 不用 night_fall.launcher —— 它自带的裸 serving（mcp.streamable_http_app() + CORS
+# + uvicorn）会丢掉本 fork __main__ 里的 OAuth 鉴权 / Accept 补丁 / decay 引擎启动 /
+# .boot_fails 复位 / mcp_extra 工具回灌。这里直接把当前 server 模块和 Night-Fall
+# 配置交给 register_night_fall，保留原有启动栈不变。
+#   · register_night_fall 会在 mcp 上注册 night_fall 工具，并把自动浮梦回调挂成
+#     本模块属性 _night_fall_auto_surface。
+#   · 再把该回调透传进 tools._runtime，供 breath 无 query 分支(surface.py)读取。
+# 任何环节失败都降级为 warning，绝不让 Night-Fall 的问题拖垮核心 Ombre 启动。
+# ============================================================
+try:
+    import sys as _sys
+    from night_fall.config import load_config as _nf_load_config
+    from night_fall.extension import register_night_fall as _nf_register
+
+    _nf_cfg = _nf_load_config(require_ombre=False)
+    _nf_server = _sys.modules[__name__]
+    _nf_register(_nf_server, _nf_cfg)
+    _tools_runtime.init(
+        night_fall_auto_surface=getattr(_nf_server, "_night_fall_auto_surface", None)
+    )
+    logger.info("Night-Fall 扩展已挂载（library 模式）：night_fall 工具 + 自动浮梦钩子已注册")
+except Exception as _nf_exc:  # noqa: BLE001 — Night-Fall 不可用绝不能拖垮核心启动
+    logger.warning(f"Night-Fall 扩展加载失败，已跳过（不影响核心功能）/ Night-Fall load skipped: {_nf_exc}")
+
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")

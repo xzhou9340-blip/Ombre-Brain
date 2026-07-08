@@ -87,11 +87,15 @@ async def dispatch(
         )
 
     # --- 无 query：浮现模式 ---
+    # valence/arousal 透传给 surface_default，供 Night-Fall 的自动浮梦钩子判断
+    # 「是否带情绪上下文」(is_contextual_noquery)——纯无参 breath() 不触发浮梦。
     if not query or not query.strip():
         return await surface_default(
             max_results=max_results,
             max_tokens=max_tokens,
             tag_filter=tag_filter,
+            valence=valence,
+            arousal=arousal,
         )
 
     # --- 有 query：检索模式 ---
