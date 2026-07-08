@@ -70,7 +70,12 @@ echo "[entrypoint] config ready at '$CONFIG'."
 # 热更新写在可写临时层，容器一重建就回退到旧镜像 → 更新"留不住"。
 # 方案：把 src/frontend 播种到数据卷上的 CODE_DIR，从那里运行；repo_root 随之
 # 指向 CODE_DIR，热更新直接写持久盘，容器重建也还在。
-#   · 镜像版本变化(正经重建) → 重新播种，让重建覆盖旧热更新。
+#   · 镜像代码变化(正经重建) → 重新播种，让重建覆盖旧热更新。判定用两条：
+#       (a) VERSION 号变了；或 (b) src/+frontend/ 内容指纹变了（防漏 bump VERSION，
+#       Night-Fall 首次集成即撞过这坑 — 镜像换了新代码但 VERSION 未 bump，卷上
+#       .seeded_image_version 相同，重播种不触发，新代码等于没生效）。
+#   · OMBRE_CODE_RESEED=1 → 无条件重播种一次（运维应急开关；用完记得取消或
+#     它会每次启动都覆盖热更新）。
 #   · 连续启动失败 → 回滚到 _prev（do-update 覆盖前留的上一版），防坏更新锁死。
 #   · 任何环节失败 → 回退到镜像内置 /app/src，绝不 brick。
 # 裸机(非 Docker)不走本脚本，直接从仓库目录跑，本就是持久的。
@@ -80,6 +85,17 @@ CODE_DIR="${OMBRE_CODE_DIR:-$(dirname "$CONFIG")/_app}"
 RUN_ROOT="$IMAGE_ROOT"
 ROLLBACK_THRESHOLD=2
 
+# 计算镜像内 src/+frontend/ 的内容指纹（16 位十六进制）。用 sha256sum 逐文件
+# 摘要后再整体摘要，输出里含文件名 → 改名/移动同样会变。任何失败返回 "unknown"，
+# 交给 VERSION 检查兜底（防指纹功能自身炸掉时静默不触发重播种）。
+_image_code_fingerprint() {
+    fp="$(cd "$IMAGE_ROOT" 2>/dev/null && \
+        find src frontend -type f -exec sha256sum {} + 2>/dev/null \
+        | LC_ALL=C sort | sha256sum 2>/dev/null | cut -c1-16)"
+    [ -n "$fp" ] || fp="unknown"
+    printf %s "$fp"
+}
+
 _bootstrap_code() {
     # CODE_DIR 必须在可写持久卷上；试探写权限，失败就回退镜像代码。
     mkdir -p "$CODE_DIR" 2>/dev/null || return 1
@@ -88,6 +104,9 @@ _bootstrap_code() {
 
     IMG_VER="$(cat "$IMAGE_ROOT/VERSION" 2>/dev/null || echo unknown)"
     SEEDED_VER="$(cat "$CODE_DIR/.seeded_image_version" 2>/dev/null || echo none)"
+    IMG_FP="$(_image_code_fingerprint)"
+    SEEDED_FP="$(cat "$CODE_DIR/.seeded_image_fingerprint" 2>/dev/null || echo none)"
+    FORCE_RESEED="${OMBRE_CODE_RESEED:-0}"
 
     # --- ② 崩溃自愈：上一次启动没被 server.py 标记成功 → 计数累加；超阈值且有 _prev 则回滚 ---
     FAILS="$(cat "$CODE_DIR/.boot_fails" 2>/dev/null || echo 0)"
@@ -103,15 +122,23 @@ _bootstrap_code() {
         echo 0 > "$CODE_DIR/.boot_fails" 2>/dev/null || true
     fi
 
-    # --- ① 播种 / 重建覆盖：首次，或镜像版本变了(正经重建) ---
-    if [ ! -f "$CODE_DIR/src/server.py" ] || [ "$IMG_VER" != "$SEEDED_VER" ]; then
-        echo "[entrypoint] 播种代码到持久卷 $CODE_DIR (image=v$IMG_VER, 卷上 seeded=$SEEDED_VER)"
+    # --- ① 播种 / 重建覆盖：首次；镜像版本变了；镜像代码指纹变了；或强制刷新开关 ---
+    if [ ! -f "$CODE_DIR/src/server.py" ] \
+       || [ "$IMG_VER" != "$SEEDED_VER" ] \
+       || [ "$IMG_FP" != "$SEEDED_FP" ] \
+       || [ "$FORCE_RESEED" = "1" ]; then
+        if [ "$FORCE_RESEED" = "1" ]; then
+            echo "[entrypoint] OMBRE_CODE_RESEED=1 → 强制重播种到 $CODE_DIR (image=v$IMG_VER fp=$IMG_FP)"
+        else
+            echo "[entrypoint] 播种代码到持久卷 $CODE_DIR (image=v$IMG_VER fp=$IMG_FP, 卷上 seeded=v$SEEDED_VER fp=$SEEDED_FP)"
+        fi
         rm -rf "$CODE_DIR/src" "$CODE_DIR/frontend" 2>/dev/null
         cp -a "$IMAGE_ROOT/src" "$CODE_DIR/src" 2>/dev/null || return 1
         cp -a "$IMAGE_ROOT/frontend" "$CODE_DIR/frontend" 2>/dev/null || return 1
         cp -a "$IMAGE_ROOT/VERSION" "$CODE_DIR/VERSION" 2>/dev/null || true
         rm -rf "$CODE_DIR/_prev" 2>/dev/null
         echo "$IMG_VER" > "$CODE_DIR/.seeded_image_version" 2>/dev/null || true
+        echo "$IMG_FP" > "$CODE_DIR/.seeded_image_fingerprint" 2>/dev/null || true
         FAILS=0
     fi
 
