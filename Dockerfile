@@ -65,4 +65,26 @@ ENV OMBRE_EMBED_BACKEND=api
 
 EXPOSE 8000
 
+# ── Night-Fall extension (path 0：原地扩展) ────────────────────────────────
+# 安装 Night-Fall 包本身（需要 git 才能 pip 装 git+ 源）。
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir git+https://github.com/ysuu525/Night-Fall.git
+
+# 集成方式：把 Night-Fall 作为**库**挂到本 fork 的 server.py 上
+# （register_night_fall 在 src/server.py 里调用），**不**走 night_fall.launcher。
+# 原因：本 fork 的启动栈高度定制——ENTRYPOINT=entrypoint.sh（配置自愈 + 持久卷
+# 代码 bootstrap + .boot_fails 回滚），server.py 的 __main__ 里还挂了 OAuth 鉴权
+# 中间件、Accept 头补丁（Claude.ai 连接器可连的关键）、decay 引擎启动、.boot_fails
+# 复位、mcp_extra 的 7 个工具回灌。night_fall.launcher 自带一套裸 serving
+# （mcp.streamable_http_app() + CORS + uvicorn），会把上述全部丢掉。因此**保留**
+# 原 ENTRYPOINT / 启动命令不变，只在 server.py 里以库方式注册工具与自动浮梦钩子。
+#
+# OMBRE_HOME 指向真正存放 server.py 的目录（本 fork 在 src/ 下，非仓库根）；
+# Night-Fall 的 config 加载器会校验 $OMBRE_HOME/server.py 是否存在。
+ENV OMBRE_HOME=/app/src
+# 潜梦数据目录：落在持久数据卷 /app/buckets 下的子目录，容器重建后潜梦保留。
+# 只**新增** night_fall/ 子目录，不触碰卷内已有的记忆桶数据。
+ENV NIGHT_FALL_DATA_DIR=/app/buckets/night_fall
+
 ENTRYPOINT ["./entrypoint.sh"]
