@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files / 复制项目文件
 COPY src/ ./src/
 COPY frontend/ ./frontend/
+COPY tools/ ./tools/
 COPY VERSION ./VERSION
 COPY config.example.yaml ./config.default.yaml
 COPY entrypoint.sh ./entrypoint.sh
@@ -51,7 +52,7 @@ ENV OMBRE_TRANSPORT=streamable-http
 # 容器内固定监听 8000；对外通过 host 端口映射 18001:8000 暴露（保持 Cloudflare
 # ingress 指向 :8000 不变）。裸机（非容器）不读此 ENV，走 server.py 默认 18001。
 ENV OMBRE_PORT=8000
-ENV OMBRE_BUCKETS_DIR=/app/buckets
+ENV OMBRE_VAULT_DIR=/app/buckets
 # config 默认落在持久卷 /app/buckets 里，而不是镜像可写层 /app/config.yaml。
 # 关键：很多 PaaS（Zeabur / 部分 Render 配置等）用**只读根文件系统**，只有挂载的卷可写——
 # 这时 entrypoint 往 /app/config.yaml 写默认配置会 "Read-only file system" 失败 → FATAL →
