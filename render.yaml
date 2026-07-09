@@ -23,7 +23,7 @@ services:
         sync: false          # e.g. https://generativelanguage.googleapis.com/v1beta/openai/
       - key: OMBRE_COMPRESS_MODEL
         sync: false          # e.g. gemini-2.5-flash
-      - key: OMBRE_BUCKETS_DIR
+      - key: OMBRE_VAULT_DIR
         value: /opt/render/project/src/buckets
     disk:
       name: ombre-buckets
