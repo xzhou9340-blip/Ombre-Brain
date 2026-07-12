@@ -33,3 +33,6 @@ jieba>=0.42.1
 # 本地 Ollama 安装包 .tar.zst 安全解压
 zstandard>=0.22.0
 
+# peek 功能：接收 iOS 快捷指令上传的手机截图并压缩为 JPEG
+Pillow>=10.0.0
+

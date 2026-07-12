@@ -659,6 +659,40 @@ async def trace(
 
 
 @mcp_extra.tool()
+async def peek():
+    """看看她最近分享的手机屏幕。无参数。24 小时内没有截图时返回"最近24小时她没有分享屏幕"，
+    否则返回上传时间 + 截图本身（image content block），你能直接看到画面。
+    她通过 iOS 快捷指令"给克看"上传，服务端已压缩到长边 1000px。
+    """
+    from mcp.server.fastmcp.utilities.types import Image as _MCPImage
+    from mcp.types import TextContent as _TextContent
+    from web import peek as _peek_mod
+    import time as _time
+    _log_op_entry("peek", {})
+    try:
+        latest = _peek_mod.read_latest()
+    except Exception as e:
+        _log_op_err("peek", e)
+        return "读取截图失败：" + str(e)
+    if latest is None:
+        _log_op_ok("peek", "no-recent-screenshot")
+        return "最近24小时她没有分享屏幕"
+    uploaded_at = latest["uploaded_at"]
+    delta_sec = max(0, int(_time.time() - uploaded_at))
+    if delta_sec < 60:
+        ago = f"{delta_sec}秒前"
+    elif delta_sec < 3600:
+        ago = f"{delta_sec // 60}分钟前"
+    else:
+        ago = f"{delta_sec // 3600}小时{(delta_sec % 3600) // 60}分钟前"
+    stamp = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(uploaded_at))
+    header = f"[Ombre Brain · peek] 她 {ago}（{stamp}）分享的屏幕："
+    img = _MCPImage(data=latest["data"], format="jpeg")
+    _log_op_ok("peek", f"image-{len(latest['data'])}b")
+    return [_TextContent(type="text", text=header), img.to_image_content()]
+
+
+@mcp_extra.tool()
 async def anchor(bucket_id: str) -> str:
     """把指定桶标记为 anchor(坐标系)。anchor 不主动出现在默认 breath，但 query/domain/emotion 命中时仍返回。硬上限 24，已满时拒绝并提示先 release。"""
     return await _with_notice(
