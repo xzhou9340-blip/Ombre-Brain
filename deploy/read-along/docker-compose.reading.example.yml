@@ -1,0 +1,18 @@
+# ============================================================
+# 仅当 Ombre Brain 跑在 Docker 里时需要（裸机部署不用这个文件）。
+#
+# 问题：read-along 只监听宿主机的 127.0.0.1:18004，Ombre 容器里的
+# 127.0.0.1 是容器自己，直连不通。
+# 方案：宿主机跑一个 socat 把 docker 网桥网关 IP 转发到本机回环
+# （见 README.md「Docker 网络」一节），容器内通过 host.docker.internal 访问。
+#
+# 用法：复制为 deploy/docker-compose.reading.yml（gitignore 之外随意），然后
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.reading.yml up -d
+# ============================================================
+services:
+  ombre-brain:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - READING_API_BASE=http://host.docker.internal:18004

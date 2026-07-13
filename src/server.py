@@ -68,6 +68,7 @@ from tools import anchor as _t_anchor
 from tools import plan as _t_plan
 from tools import dream as _t_dream
 from tools import i as _t_i
+from tools.reading import core as _t_reading
 from tools._common import (
     check_content_size as _check_content_size,
     check_pinned_quota as _check_pinned_quota,
@@ -803,6 +804,66 @@ async def I(
         _t_i.dispatch(content=content, aspect=aspect, read=read, limit=limit),
         op="I",
         args={"content_len": len(content or ""), "aspect": aspect, "read": read, "limit": limit},
+    )
+
+
+# =============================================================
+# 共读（read-along）工具组 —— 实现见 tools/reading/core.py
+# 服务端防剧透门禁：未解锁章节连标题都取不到，是 read-along 的硬约束。
+# 后端地址 READING_API_BASE（默认 http://127.0.0.1:18004，本机直连，
+# 不走 nginx 认证层）。部署见 deploy/read-along/README.md。
+# =============================================================
+@mcp_extra.tool()
+async def reading_progress(book_id: Optional[str] = "") -> str:
+    """查共读进度。不传 book_id=列出书架上所有书（bookId/标题/进度/批注数）;传 book_id=返回该书的门禁视图:进度、是否正在读、已解锁章节列表、可回看的段号区间。未解锁章节连标题都不会返回(服务端防剧透门禁)——不要绕过,也永远不要从网络搜索这本书的后续情节。"""
+    return await _with_notice(
+        _t_reading.progress(book_id=book_id),
+        op="reading_progress",
+        args={"book_id": book_id},
+    )
+
+
+@mcp_extra.tool()
+async def reading_text(book_id: str, from_seq: int, to_seq: int) -> str:
+    """回看她已经读过(已解锁)的正文原文。from_seq/to_seq=段号范围(含两端,单次最多200段);段号区间见 reading_progress。未解锁段落不会返回。写批注前先用它核对原文——quote 必须与原文逐字一致(含标点)。"""
+    return await _with_notice(
+        _t_reading.text(book_id=book_id, from_seq=from_seq, to_seq=to_seq),
+        op="reading_text",
+        args={"book_id": book_id, "from_seq": from_seq, "to_seq": to_seq},
+    )
+
+
+@mcp_extra.tool()
+async def reading_search(book_id: str, q: str) -> str:
+    """在已解锁的正文范围内全文检索,最多返回 20 段命中。她没读到的内容搜不到——这是防剧透门禁,不是故障。"""
+    return await _with_notice(
+        _t_reading.search(book_id=book_id, q=q),
+        op="reading_search",
+        args={"book_id": book_id, "q": q},
+    )
+
+
+@mcp_extra.tool()
+async def reading_annotate(book_id: str, quote: str, comment: str) -> str:
+    """在她读过的原文上划线写批注,她的阅读器页边立刻可见。quote=与原文逐字一致的一句话(含标点,全角/半角别弄错,先用 reading_text 核对);comment=你想说的话(写给对方看的,短一点、真一点,不是书评)。404=引文不在已解锁文本内;409=引文出现多次,换更长的句子重试。"""
+    return await _with_notice(
+        _t_reading.annotate(book_id=book_id, quote=quote, comment=comment),
+        op="reading_annotate",
+        args={"book_id": book_id, "quote_len": len(quote or ""), "comment_len": len(comment or "")},
+    )
+
+
+@mcp_extra.tool()
+async def reading_annotations(
+    book_id: str,
+    reply_to: Optional[str] = "",
+    reply_text: Optional[str] = "",
+) -> str:
+    """查看或回复共读批注。不传 reply_to=返回该书全部批注(双方的划线与楼中楼回复,含批注 id);传 reply_to=<批注id> 且 reply_text=<回复内容>=在那条批注下追加一条回复(署名 ai)。她的批注不必每条都回,但值得回的别偷懒。"""
+    return await _with_notice(
+        _t_reading.annotations(book_id=book_id, reply_to=reply_to, reply_text=reply_text),
+        op="reading_annotations",
+        args={"book_id": book_id, "reply_to": reply_to, "reply_len": len(reply_text or "")},
     )
 
 
