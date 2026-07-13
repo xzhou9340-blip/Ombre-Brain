@@ -842,9 +842,10 @@ async def I(
 # =============================================================
 # 共读（read-along）工具组 —— 实现见 tools/reading/core.py
 # 服务端防剧透门禁：未解锁章节连标题都取不到，是 read-along 的硬约束。
-# 后端地址 READING_API_BASE：生产为 read-along 独立 Render 服务的公网地址
-# https://<服务>.onrender.com/<token>（token 路径即访问控制），
-# 默认 http://127.0.0.1:18004 仅供本地开发。部署见 read-along/README.md。
+# read-along 是本服务里的 node 子进程（web/reading_bridge.py 托管，
+# lifespan 拉起，127.0.0.1 内部端口 + 持久盘子目录）；工具走内部环回地址
+# http://127.0.0.1:<port>/<token>，不出公网。READING_API_BASE 可显式覆盖。
+# 手机阅读器走 /reading/<token>/* 反向代理。部署见 read-along/README.md。
 # =============================================================
 @mcp_extra.tool()
 async def reading_progress(book_id: Optional[str] = "") -> str:
@@ -1073,6 +1074,13 @@ if __name__ == "__main__":
                         await _ollama_local.ensure_child_on_boot()
                     except Exception as _ol_exc:
                         logger.warning(f"ollama child boot failed: {_ol_exc}")
+                    # read-along 共读后端：node 子进程（127.0.0.1 内部端口 + 持久盘
+                    # 子目录），崩溃自动重启；node 缺失/启动失败只降级，不影响 ombre。
+                    try:
+                        from web import reading_bridge as _reading_bridge
+                        await _reading_bridge.ensure_child_on_boot()
+                    except Exception as _rb_exc:
+                        logger.warning(f"reading child boot failed: {_rb_exc}")
                     # #4a ②：启动成功（app 已初始化、引擎已起、即将开始服务）→ 清零 entrypoint
                     # 的崩溃计数 .boot_fails。崩在这之前（import/init）= 启动失败，计数保留，
                     # 连续失败由 entrypoint 回滚到 _prev。只在「从持久卷 CODE_DIR 跑」时存在该文件。
@@ -1094,6 +1102,11 @@ if __name__ == "__main__":
                     try:
                         from web import ollama_local as _ollama_local
                         await _ollama_local.stop_child()
+                    except Exception:
+                        pass
+                    try:
+                        from web import reading_bridge as _reading_bridge
+                        await _reading_bridge.stop_child()
                     except Exception:
                         pass
                     _stop_tunnel()

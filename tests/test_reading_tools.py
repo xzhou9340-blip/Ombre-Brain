@@ -278,7 +278,7 @@ async def test_unknown_book_and_bad_book_id(fake_server):
 async def test_connection_refused_returns_help(monkeypatch):
     monkeypatch.setenv("READING_API_BASE", "http://127.0.0.1:1")   # 必然拒绝
     out = await reading.progress("mybook")
-    assert "连不上" in out and "READING_API_BASE" in out and "/health" in out
+    assert "连不上" in out and "[reading]" in out and "/health" in out
 
 
 @pytest.mark.asyncio

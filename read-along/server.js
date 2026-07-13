@@ -31,6 +31,15 @@ if (WEB_TOKEN && !/^[A-Za-z0-9_-]+$/.test(WEB_TOKEN)) {
 if (!WEB_TOKEN && process.env.PORT) {
   console.warn("[reading] ⚠ 检测到 PaaS 环境（PORT 已注入）但没设 READING_WEB_TOKEN——服务将无访问控制地暴露在公网！");
 }
+
+// 挂在反向代理后面时（ombre-brain 的 /reading/* → 本服务），浏览器看到的公网路径
+// 多一个前缀；只影响 serveReader 给前端 JS 注入的 API 常量，路由/门禁不变。
+// 例：READING_PUBLIC_PREFIX=/reading → 前端 API = /reading/<token>/api。
+const PUBLIC_PREFIX = (process.env.READING_PUBLIC_PREFIX || "").trim().replace(/\/+$/, "");
+if (PUBLIC_PREFIX && !/^\/[A-Za-z0-9_\/-]*$/.test(PUBLIC_PREFIX)) {
+  console.error("[reading] READING_PUBLIC_PREFIX 必须以 / 开头且只含 URL 安全字符");
+  process.exit(1);
+}
 const DWELL_MS = Number(process.env.READING_DWELL_MS || 15000);
 const IDLE_CLOSE_MS = Number(process.env.READING_IDLE_MS || 5 * 60 * 1000);
 const DWELL_MIN_S = 5;
@@ -412,7 +421,7 @@ let _readerHtmlCache = null;
 function serveReader(res) {
   if (_readerHtmlCache === null) {
     const raw = fs.readFileSync(path.join(__dirname, "web", "reader.html"), "utf8");
-    const apiBase = (WEB_TOKEN ? `/${WEB_TOKEN}` : "") + "/api";
+    const apiBase = PUBLIC_PREFIX + (WEB_TOKEN ? `/${WEB_TOKEN}` : "") + "/api";
     const rewritten = raw.replace("const API = '/reading/api';", `const API = '${apiBase}';`);
     if (rewritten === raw) {
       // 上游 reader.html 结构变了导致改写落空——宁可启动后第一次访问就炸出来
