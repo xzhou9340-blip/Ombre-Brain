@@ -6,13 +6,13 @@
 
 ### 新增 / Added
 
-- 共读（read-along）接入：新增 5 个 MCP 工具 `reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations`（实现在 `src/tools/reading/`），包装同机部署的 read-along 后端的门禁与批注端点。未解锁章节连标题都取不到——防剧透门禁是 read-along 服务端硬约束，工具层只转译不绕过。
-- 后端地址可用环境变量 `READING_API_BASE` 覆盖（默认 `http://127.0.0.1:18004`，本机直连、不走 nginx 认证层），每次调用现读，改配置即时生效。
-- 新增 `deploy/read-along/`：VPS 部署脚本（clone 到 /opt/read-along + npm install + pm2 常驻 + DRY-RUN 推送）、nginx 片段模板（随机路径访问控制 + 可选 Basic Auth + `client_max_body_size 50m`）、Docker 网络覆盖示例与完整验收清单。
+- 共读（read-along）接入：新增 5 个 MCP 工具 `reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations`（实现在 `src/tools/reading/`），包装 read-along 后端的门禁与批注端点。未解锁章节连标题都取不到——防剧透门禁是 read-along 服务端硬约束，工具层只转译不绕过。
+- read-along 以独立 Render Web Service 部署：vendor 进 `read-along/`（上游 MIT，基于 commit `5043a65`），适配 PaaS——监听 `0.0.0.0:$PORT`、Node 自托管 reader.html、`READING_WEB_TOKEN` 随机路径访问控制（除 `/health` 外全部挂 `/<token>/` 前缀）、`DATA_DIR` 指向 persistent disk（Render 容器磁盘临时，不挂盘数据必丢）。推送保持 DRY-RUN（两个推送开关都不设，只写 outbox.log）。
+- `render.yaml` 增加 `read-along` 服务定义（`rootDir` + 1GB 持久盘 + token 自动生成），ombre-brain 服务增加 `READING_API_BASE`（`sync: false`，值为 read-along 公网地址含 token 路径）。工具每次调用现读该变量，在其后拼 `/api/...`。
 
 ### 测试 / Tests
 
-- 新增 `tests/test_reading_tools.py`：用进程内假 read-along 后端覆盖 5 个工具的 URL 拼接、门禁语义（未解锁内容绝不出现）、409/404 指引转译、回复署名 `ai`、连接失败排查文案。
+- 新增 `tests/test_reading_tools.py`：用进程内假 read-along 后端覆盖 5 个工具的 URL 拼接、门禁语义（未解锁内容绝不出现）、409/404 指引转译、回复署名 `ai`、带 token 路径前缀的 base URL、连接失败排查文案。
 
 ## 2.4.10
 

@@ -12,7 +12,9 @@ tools/reading/core.py — 共读工具实现
 - annotations(book_id, reply_to, reply_text) → 查批注列表 / 在某条批注下回复
 
 关键行为：
-- 后端地址每次调用读 READING_API_BASE（默认 http://127.0.0.1:18004），
+- 后端地址每次调用读 READING_API_BASE（默认 http://127.0.0.1:18004 仅供本地开发；
+  生产为 read-along 的 Render 公网地址 https://<服务>.onrender.com/<token>，
+  token 路径即访问控制，工具在 base 后直接拼 /api/...），
   与 server.py 的 _fire_webhook 同款「不缓存 env」策略，改配置即时生效
 - 防剧透门禁在 read-along 服务端：这里只调 gate/annotate 端点，
   404/409 原样转译成给模型看得懂的指引，绝不尝试其它端点绕过
@@ -38,8 +40,8 @@ logger = logging.getLogger("ombre_brain")
 # ============================================================
 # 调参面板
 # ============================================================
-_DEFAULT_BASE = "http://127.0.0.1:18004"   # read-along 默认监听地址（服务器本机）
-_HTTP_TIMEOUT_SECONDS = 10.0               # 本机回环，10s 足够
+_DEFAULT_BASE = "http://127.0.0.1:18004"   # 本地开发默认；生产走 READING_API_BASE
+_HTTP_TIMEOUT_SECONDS = 15.0               # 生产是跨服务公网 HTTPS（Render→Render），留足余量
 _QUOTE_PREVIEW_CHARS = 80                  # 批注列表里引文的截断长度
 _TEXT_RANGE_MAX = 200                      # gate/text 单次段数上限（与服务端一致）
 
@@ -53,12 +55,16 @@ def _base_url() -> str:
 
 def _conn_help(exc: Exception) -> str:
     base = _base_url()
+    # base 可能带访问 token（/<token> 路径），/health 挂在服务根、不带 token
+    root = base.split("://", 1)[-1].split("/", 1)[0]
+    scheme = base.split("://", 1)[0] if "://" in base else "https"
     return (
         f"共读服务连不上（{base}）：{type(exc).__name__}: {exc}\n"
-        f"排查：① 服务器上 `pm2 status reading` 确认 read-along 在跑；"
-        f"② `curl -s {base}/health` 应返回 {{\"ok\":true}}；"
-        f"③ 若 Ombre 跑在 Docker 容器里，容器内 127.0.0.1 不是宿主机，"
-        f"需按 deploy/read-along/README.md 配置 READING_API_BASE。"
+        f"排查：① Render Dashboard 看 read-along 服务是否 Live；"
+        f"② `curl -s {scheme}://{root}/health` 应返回 {{\"ok\":true}}；"
+        f"③ 检查 READING_API_BASE 是否为 https://<read-along服务>.onrender.com/<token>"
+        f"（含 token 路径，与该服务的 READING_WEB_TOKEN 一致），"
+        f"配置见 read-along/README.md。"
     )
 
 

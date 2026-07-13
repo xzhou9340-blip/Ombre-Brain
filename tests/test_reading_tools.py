@@ -66,6 +66,13 @@ def _unlocked(seq):
 
 class FakeReadAlong(BaseHTTPRequestHandler):
     annotations = []  # 类级共享，测试间由 fixture 重置
+    path_prefix = ""  # 模拟生产的 /<token> 前缀（read-along 服务端剥前缀后路由）
+
+    def _path(self, u):
+        p = u.path
+        if self.path_prefix and p.startswith(self.path_prefix):
+            p = p[len(self.path_prefix):]
+        return p
 
     def _send(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -84,6 +91,7 @@ class FakeReadAlong(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        u = u._replace(path=self._path(u))
         q = parse_qs(u.query)
         if u.path == "/api/books":
             return self._send(200, {"books": [{
@@ -133,6 +141,7 @@ class FakeReadAlong(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        u = u._replace(path=self._path(u))
         body = self._read_json()
         if u.path == "/api/annotate":
             quote = str(body.get("quote") or "")
@@ -170,6 +179,7 @@ class FakeReadAlong(BaseHTTPRequestHandler):
 
 @pytest.fixture()
 def fake_server(monkeypatch):
+    FakeReadAlong.path_prefix = ""
     FakeReadAlong.annotations = [{
         "id": "anno-human", "seq": 0, "quote": "第一段，她已经读过了。",
         "createdBy": "human", "createdAt": "2026-07-12T00:00:00Z",
@@ -268,4 +278,20 @@ async def test_unknown_book_and_bad_book_id(fake_server):
 async def test_connection_refused_returns_help(monkeypatch):
     monkeypatch.setenv("READING_API_BASE", "http://127.0.0.1:1")   # 必然拒绝
     out = await reading.progress("mybook")
-    assert "连不上" in out and "pm2" in out
+    assert "连不上" in out and "READING_API_BASE" in out and "/health" in out
+
+
+@pytest.mark.asyncio
+async def test_base_url_with_token_path_prefix(fake_server, monkeypatch):
+    """生产形态：READING_API_BASE 带 /<token> 路径前缀（Render 公网 + 访问控制）。
+
+    read-along 服务端会剥掉前缀再路由；这里让假后端同样接受
+    /tok-abc123/api/... 形式，验证工具层的 URL 拼接对带路径的 base 成立。
+    """
+    monkeypatch.setattr(FakeReadAlong, "path_prefix", "/tok-abc123", raising=False)
+    base = f"http://127.0.0.1:{fake_server.server_address[1]}/tok-abc123"
+    monkeypatch.setenv("READING_API_BASE", base)
+    out = await reading.progress("mybook")
+    assert "furthestSeq=2" in out and LOCKED_TITLE not in out
+    out2 = await reading.text("mybook", 0, 2)
+    assert PARAS[2] in out2

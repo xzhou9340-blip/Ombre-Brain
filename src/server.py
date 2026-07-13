@@ -810,8 +810,9 @@ async def I(
 # =============================================================
 # 共读（read-along）工具组 —— 实现见 tools/reading/core.py
 # 服务端防剧透门禁：未解锁章节连标题都取不到，是 read-along 的硬约束。
-# 后端地址 READING_API_BASE（默认 http://127.0.0.1:18004，本机直连，
-# 不走 nginx 认证层）。部署见 deploy/read-along/README.md。
+# 后端地址 READING_API_BASE：生产为 read-along 独立 Render 服务的公网地址
+# https://<服务>.onrender.com/<token>（token 路径即访问控制），
+# 默认 http://127.0.0.1:18004 仅供本地开发。部署见 read-along/README.md。
 # =============================================================
 @mcp_extra.tool()
 async def reading_progress(book_id: Optional[str] = "") -> str:
