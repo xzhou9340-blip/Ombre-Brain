@@ -25,7 +25,39 @@ services:
         sync: false          # e.g. gemini-2.5-flash
       - key: OMBRE_VAULT_DIR
         value: /opt/render/project/src/buckets
+      - key: READING_API_BASE
+        sync: false          # https://<read-along 服务>.onrender.com/<READING_WEB_TOKEN>（含 token，在 Dashboard 填）
+      - key: BARK_KEY
+        sync: false          # bark_push 工具用；Bark App 设备 key，在 Dashboard 填
+      - key: SUPABASE_URL
+        sync: false          # phone_activity_query 工具用
+      - key: SUPABASE_SERVICE_KEY
+        sync: false          # service_role key 权限大，只放 Dashboard，绝不进仓库
     disk:
       name: ombre-buckets
       mountPath: /opt/render/project/src/buckets
       sizeGB: 5              # bge-m3 model ~2.2GB + buckets; free plan only has 1GB, upgrade needed
+
+  # ---- read-along 共读后端（独立 Web Service）--------------------
+  # 阅读器 + API 全部挂在 /<READING_WEB_TOKEN>/ 随机前缀下（访问控制），
+  # 只有 /health 公开。数据必须落持久盘：Render 容器磁盘每次部署/重启清空。
+  # 推送保持 DRY-RUN：READING_PUSH_ENABLED / READING_PUSH_WEBHOOK 都不设，
+  # 推送只写 <DATA_DIR>/outbox.log。
+  - type: web
+    name: read-along
+    env: node
+    region: oregon           # 与 ombre-brain 同区，减小 MCP 工具的往返延迟
+    plan: starter            # 挂 persistent disk 需要付费计划
+    rootDir: read-along
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: READING_WEB_TOKEN
+        generateValue: true  # 随机 token；也可在 Dashboard 换成自己的（限字母/数字/_/-）
+    disk:
+      name: reading-data
+      mountPath: /var/data
+      sizeGB: 1              # 全部状态就是 data/（本地 JSON），1GB 够放很多书
