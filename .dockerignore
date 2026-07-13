@@ -39,7 +39,10 @@ config.yaml
 docs/
 tests/
 deploy/
-read-along/
+
+# read-along：源码要进镜像（子进程），但依赖构建期现装、数据在持久盘
+read-along/node_modules/
+read-along/data/
 *.md
 
 # 日志与临时文件

@@ -28,15 +28,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js（read-along 共读后端以子进程方式跑在本服务里，见 src/web/reading_bridge.py）
+# Debian bookworm 的 nodejs 是 18.x，满足 read-along 的 Node ≥ 18（内置 fetch）要求。
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version
+
 # Install dependencies first (leverage Docker cache)
 # 先装依赖（利用 Docker 缓存）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# read-along 的 node 依赖也先装（同样吃缓存：package*.json 不变就不重装）
+COPY read-along/package.json read-along/package-lock.json ./read-along/
+RUN cd read-along && npm install --omit=dev && npm cache clean --force
+
 # Copy project files / 复制项目文件
 COPY src/ ./src/
 COPY frontend/ ./frontend/
 COPY tools/ ./tools/
+# read-along 代码（node_modules 已在上面装好，.dockerignore 排除了本地的
+# node_modules/ 与 data/，COPY 是合并语义、不会覆盖掉装好的依赖）
+COPY read-along/ ./read-along/
 COPY VERSION ./VERSION
 COPY config.example.yaml ./config.default.yaml
 COPY entrypoint.sh ./entrypoint.sh

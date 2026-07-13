@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+### 变更 / Changed
+
+- 共读（read-along）部署形态改为**内嵌子进程**：不再单独建 Render 服务，`src/web/reading_bridge.py` 在 ombre-brain 启动时拉起 `node read-along/server.js`（127.0.0.1 内部端口，不对外），与 ombre 共用同一服务与持久盘（数据在 `<buckets_dir>/read-along/`），零新增费用。崩溃自动重启（指数退避 1→60s），node 缺失/启动失败只降级 warning、不影响 ombre 主服务。
+- Python 侧新增 `/reading/<token>/*` 反向代理（请求/响应双向流式，50MB 传书可过），read-along 自身 token 门禁语义原样保留（无/错 token 404 不可区分）；`READING_PUBLIC_PREFIX` 让 reader.html 的 API 常量带上代理前缀。
+- `reading_*` 工具后端地址改走内部环回 `http://127.0.0.1:<port>/<token>`（bridge 自动接线 `READING_API_BASE`，可显式覆盖），不出公网。token 未配置时首启自动生成并持久化到 `<DATA_DIR>/.web-token`。
+- Dockerfile 增装 Node.js 18 + 构建期 `npm install`；render.yaml 收敛为单个 Docker 服务（删除独立 read-along 服务定义）。DRY-RUN 保持：bridge 构造子进程环境时主动剔除 `READING_PUSH_ENABLED` / `READING_PUSH_WEBHOOK`（以及 Render 注入的 `PORT`）。
+- 新增 `tests/test_reading_bridge.py`：子进程环境构造（推送开关剔除）、token 生成/持久化、端到端（代理链路、门禁、上传、DRY-RUN outbox、工具内部地址、崩溃自愈、重启持久性）。
+
 ### 新增 / Added
 
 - 共读（read-along）接入：新增 5 个 MCP 工具 `reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations`（实现在 `src/tools/reading/`），包装 read-along 后端的门禁与批注端点。未解锁章节连标题都取不到——防剧透门禁是 read-along 服务端硬约束，工具层只转译不绕过。
