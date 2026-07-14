@@ -105,6 +105,54 @@ def test_web_token_generated_and_persisted(bridge_env):
 
 
 # ============================================================
+# server.js 定位（回归：线上 repo_root 指向持久盘代码副本 _app/，
+# 副本里只有 src/+frontend/、没有 read-along/ —— 曾去
+# <buckets>/_app/read-along 找代码导致子进程永远起不来）
+# ============================================================
+def test_app_dir_falls_back_when_repo_root_lacks_code(bridge_env, monkeypatch, tmp_path):
+    """代码目录与 buckets_dir/repo_root 分离：repo_root 下没有 read-along 时，
+    必须回退到 __file__ 推导的仓库根（本仓库里真实存在 server.js）。"""
+    from web import _shared as sh
+    fake_code_dir = tmp_path / "buckets" / "_app"        # 模拟 entrypoint 的 CODE_DIR
+    (fake_code_dir / "src").mkdir(parents=True)
+    monkeypatch.setattr(sh, "repo_root", str(fake_code_dir))
+    picked = bridge._app_dir()
+    assert picked == APP_DIR                             # 落到真实仓库的 read-along/
+    assert os.path.isfile(os.path.join(picked, "server.js"))
+    # 候选链首位仍是 repo_root（保持「代码副本若真带了 read-along 就优先用」的语义）
+    assert bridge._app_dir_candidates()[0] == str(fake_code_dir / "read-along")
+
+
+def test_app_dir_prefers_repo_root_when_it_has_code(bridge_env, monkeypatch, tmp_path):
+    from web import _shared as sh
+    root = tmp_path / "seeded"
+    (root / "read-along").mkdir(parents=True)
+    (root / "read-along" / "server.js").write_text("// stub", encoding="utf-8")
+    monkeypatch.setattr(sh, "repo_root", str(root))
+    assert bridge._app_dir() == str(root / "read-along")
+
+
+def test_app_dir_env_override_is_strict(bridge_env, monkeypatch, tmp_path):
+    """READING_APP_DIR 显式指定时不回退扫描；指错目录时 _spawn 报错要直说。"""
+    monkeypatch.setenv("READING_APP_DIR", str(tmp_path / "nowhere"))
+    assert bridge._app_dir() == str(tmp_path / "nowhere")
+    assert bridge._spawn() is None
+    assert "nowhere" in bridge._last_spawn_error and "READING_APP_DIR" in bridge._last_spawn_error
+
+
+def test_spawn_error_lists_all_candidates(bridge_env, monkeypatch, tmp_path):
+    """哪儿都找不到 server.js 时，错误信息带完整候选清单（含镜像内置路径）。"""
+    from web import _shared as sh
+    monkeypatch.setattr(sh, "repo_root", str(tmp_path / "empty1"))
+    monkeypatch.setattr(bridge, "_IMAGE_APP_DIR", str(tmp_path / "empty2"))
+    monkeypatch.setattr(bridge, "_app_dir_candidates", lambda: [
+        str(tmp_path / "empty1" / "read-along"), str(tmp_path / "empty2"),
+    ])
+    assert bridge._spawn() is None
+    assert "empty1" in bridge._last_spawn_error and "empty2" in bridge._last_spawn_error
+
+
+# ============================================================
 # 集成（需要 node）
 # ============================================================
 async def _wait_health(port: int, timeout: float = 15.0) -> None:

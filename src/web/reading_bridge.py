@@ -84,11 +84,49 @@ _token_cache = ""
 # ============================================================
 # 路径 / 配置 helper
 # ============================================================
-def _app_dir() -> str:
-    """read-along 的代码目录：<repo_root>/read-along。"""
+# Dockerfile 的 WORKDIR（镜像内置副本的固定位置）。entrypoint 的持久卷热更新
+# 只播种 src/ + frontend/ 到 CODE_DIR（<buckets>/_app）并从那里运行——此时
+# repo_root / __file__ 都指向代码副本，副本里**没有** read-along/，必须回退到
+# 镜像内置路径。read-along 的更新随镜像重建走，不参与 do-update 热更新。
+_IMAGE_APP_DIR = "/app/read-along"
+
+
+def _app_dir_candidates() -> list[str]:
+    """server.js 的候选目录，按优先级排列（去重保序）。"""
     from . import _shared as sh
-    root = sh.repo_root or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(root, "read-along")
+    cands = []
+    if sh.repo_root:
+        cands.append(os.path.join(sh.repo_root, "read-along"))
+    file_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cands.append(os.path.join(file_root, "read-along"))
+    cands.append(_IMAGE_APP_DIR)
+    seen: set = set()
+    out = []
+    for c in cands:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _app_dir() -> str:
+    """read-along 代码目录。
+
+    - env READING_APP_DIR：显式指定，**不**回退扫描（配错了让 _spawn 的报错
+      直说，而不是静默用别的目录）
+    - 否则取候选链里第一个真的含 server.js 的目录（repo_root 可能指向持久盘
+      上的代码副本 _app/，那里没有 read-along —— 线上 Render 就是这个形态，
+      要能落到镜像内置的 /app/read-along）
+    - 都没有则返回首选候选，_spawn 会把完整候选清单写进错误信息
+    """
+    explicit = (os.environ.get("READING_APP_DIR") or "").strip()
+    if explicit:
+        return os.path.abspath(explicit)
+    cands = _app_dir_candidates()
+    for c in cands:
+        if os.path.isfile(os.path.join(c, "server.js")):
+            return c
+    return cands[0]
 
 
 def _data_dir() -> str:
@@ -179,7 +217,11 @@ def _spawn() -> "subprocess.Popen | None":
     app = _app_dir()
     server_js = os.path.join(app, "server.js")
     if not os.path.isfile(server_js):
-        _last_spawn_error = f"找不到 {server_js}（read-along/ 没随代码一起部署？）"
+        tried = os.environ.get("READING_APP_DIR", "").strip() or "、".join(_app_dir_candidates())
+        _last_spawn_error = (
+            f"找不到 read-along/server.js，已尝试：{tried}"
+            f"（镜像里应在 {_IMAGE_APP_DIR}；也可用 READING_APP_DIR 显式指定）"
+        )
         return None
     if not os.path.isdir(os.path.join(app, "node_modules")):
         # 依赖没装只警告不拦：epub 解析等会在用到时报错，txt 导入等纯内置功能仍可用
@@ -246,8 +288,8 @@ async def ensure_child_on_boot() -> None:
             logger.warning("[reading] 共读子进程未启动：%s（ombre 其余功能不受影响）", _last_spawn_error)
         else:
             logger.info(
-                "[reading] 共读子进程已启动 pid=%s port=%s data=%s（阅读器：%s/<token>/）",
-                _child_proc.pid, _internal_port(), _data_dir(), _PUBLIC_PREFIX,
+                "[reading] 共读子进程已启动 pid=%s port=%s app=%s data=%s（阅读器：%s/<token>/）",
+                _child_proc.pid, _internal_port(), _app_dir(), _data_dir(), _PUBLIC_PREFIX,
             )
         _wire_api_base()
         if _monitor_task is None or _monitor_task.done():
