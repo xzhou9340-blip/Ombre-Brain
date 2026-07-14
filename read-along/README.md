@@ -41,6 +41,7 @@ Render Web Service (ombre-brain, Docker)            ▼
 | `READING_WEB_TOKEN` | 首启自动生成 | 访问 token（限字母/数字/`_`/`-`）。自动生成的持久化在 `<DATA_DIR>/.web-token`，重启不变 |
 | `READING_INTERNAL_PORT` | `18004` | 子进程内部端口（127.0.0.1） |
 | `READING_DATA_DIR` | `<buckets_dir>/read-along` | 数据目录；默认已在持久盘上 |
+| `READING_APP_DIR` | 自动探测 | server.js 所在目录的显式覆盖。默认候选链：`<repo_root>/read-along` → 按 `__file__` 推导 → 镜像内置 `/app/read-along`（entrypoint 的持久卷热更新只播种 src/+frontend/，repo_root 指向代码副本时必须回退到镜像路径——正是线上形态） |
 | `READING_API_BASE` | 自动=内部环回 | MCP 工具的后端地址，一般不用设 |
 | `READING_DWELL_MS` / `READING_IDLE_MS` / `READING_READER_NAME` | 同上游 | 停留阈值 / 空闲合卷 / 读者称呼 |
 | `READING_PUSH_ENABLED` / `READING_PUSH_WEBHOOK` | **保持不设** | DRY-RUN：推送只写 `<DATA_DIR>/outbox.log`，不外发。bridge 构造子进程环境时会主动剔除这两个变量 |
