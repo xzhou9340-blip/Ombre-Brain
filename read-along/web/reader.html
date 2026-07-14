@@ -7,6 +7,9 @@
 <title>共读书架</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+/* 阅读中横滑翻页：别让浏览器把靠边的横滑当历史前进/后退，纵向也别触发下拉刷新
+   （iOS Safari 的系统级边缘返回手势关不掉；从主屏添加（standalone）后无此问题） */
+html, body { overscroll-behavior: none; }
 :root {
   --bg: #f5f1e8; --text: #3a352e; --card: #ffffff; --panel: #faf7f0;
   --muted: #8a8272; --faint: #a09880; --quote: #6b6354;
@@ -61,7 +64,10 @@ html, body { height: 100%; background: var(--bg); font-family: -apple-system, "P
 .empty-tip { text-align: center; color: var(--faint); font-size: 13px; padding: 30px 0; }
 
 /* ── 阅读器 ── */
-.reader { position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column; z-index: 30; }
+/* cursor:pointer 不是装饰：iOS Safari 只对「可点击」元素合成 click，
+   委托在 .reader 上的翻页点击没有它在 iPhone 上不触发（书架卡片能点
+   正是因为 .book-card 有 cursor:pointer）。touch-action 消双击缩放延迟。 */
+.reader { position: fixed; inset: 0; background: var(--bg); display: none; flex-direction: column; z-index: 30; cursor: pointer; touch-action: manipulation; }
 .reader.open { display: flex; }
 .reader-top { display: flex; align-items: center; padding: max(10px, env(safe-area-inset-top)) 14px 8px; font-size: 14px; color: var(--muted); }
 .r-back { font-size: 24px; padding: 0 10px 0 2px; }
@@ -799,6 +805,25 @@ reader.addEventListener('click', async (e) => {
   else if (x > 0.67) turnPage(1);
   else openBar();
 });
+
+/* ── 滑动翻页（手机）：左滑下一页、右滑上一页 ──
+   横向位移 ≥60px 且明显大于纵向才算滑动；大位移不会再触发 click，
+   与上面的点击翻页天然不重复。批注模式（两点选句）不响应滑动。 */
+let swipeStart = null;
+reader.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) { swipeStart = null; return; }
+  swipeStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+reader.addEventListener('touchend', (e) => {
+  if (!swipeStart || !e.changedTouches.length) return;
+  const dx = e.changedTouches[0].clientX - swipeStart.x;
+  const dy = e.changedTouches[0].clientY - swipeStart.y;
+  swipeStart = null;
+  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  if (reader.classList.contains('annotating')) return;
+  if (reader.classList.contains('bar-open')) { closeBar(); return; }
+  turnPage(dx < 0 ? 1 : -1);
+}, { passive: true });
 
 /* ── 两点点选划线 ── */
 
