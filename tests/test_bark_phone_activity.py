@@ -67,6 +67,19 @@ class TestBarkPush:
         assert seen["raw_path"] == f"/{_FAKE_BARK_KEY}/a%2Fb/c%2Fd".encode()
 
     @pytest.mark.asyncio
+    async def test_url_param_passed(self, monkeypatch):
+        seen = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["url"] = request.url.params.get("url")
+            return httpx.Response(200, json={"code": 200, "message": "success"})
+
+        monkeypatch.setattr(bark_core, "_make_client", _mock_client(handler))
+        out = await bark_core.bark_push("克", "语音", url="https://x.supabase.co/a.mp3")
+        assert seen["url"] == "https://x.supabase.co/a.mp3"
+        assert out.startswith("✅")
+
+    @pytest.mark.asyncio
     async def test_failure_returns_bark_error_verbatim(self, monkeypatch):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(400, json={"code": 400, "message": "device key error"})

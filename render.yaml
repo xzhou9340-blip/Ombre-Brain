@@ -32,9 +32,13 @@ services:
       - key: BARK_KEY
         sync: false          # bark_push 工具用；Bark App 设备 key，在 Dashboard 填
       - key: SUPABASE_URL
-        sync: false          # phone_activity_query 工具用
+        sync: false          # phone_activity_query / speak 工具用
       - key: SUPABASE_SERVICE_KEY
         sync: false          # service_role key 权限大，只放 Dashboard，绝不进仓库
+      - key: ELEVENLABS_API_KEY
+        sync: false          # speak 工具用；ElevenLabs TTS key，在 Dashboard 填
+      - key: ELEVENLABS_VOICE_ID
+        sync: false          # speak 工具用；克的 voice id
       # read-along（共读）内嵌子进程相关——全部可留空走默认：
       #   READING_WEB_TOKEN     不设则首启自动生成并持久化到盘（<盘>/read-along/.web-token）
       #   READING_INTERNAL_PORT 默认 18004（127.0.0.1 内部端口，不对外）
