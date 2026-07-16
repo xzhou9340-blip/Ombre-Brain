@@ -1,4 +1,8 @@
-# voice — TTS 语音功能(第一阶段:本地跑通)
+# voice — TTS 语音功能(本地 CLI)
+
+> 第二阶段已完成:核心逻辑已搬进 `src/tools/speak/core.py` 注册为 MCP 工具
+> `speak`(生成后自动 Bark 推送)。本目录保留作本地调试 CLI;两边的
+> generate_speech 是同一份逻辑,改动请保持同步。
 
 ElevenLabs(`eleven_v3`,中文)生成 mp3 → 上传 Supabase Storage 的 `voices` bucket(public,自动创建)→ 返回公开 URL。
 

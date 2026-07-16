@@ -9,8 +9,10 @@ tools/bark/core.py — bark_push 实现
 - 设备 key 取自环境变量 BARK_KEY（只在服务器端配置）；未配置时返回
   可读的提示字符串，不抛异常。
 - title / body 先 URL encode（中文必须编码）再拼进路径：
-    GET https://api.day.app/{BARK_KEY}/{title}/{body}?icon=...
+    GET https://api.day.app/{BARK_KEY}/{title}/{body}?icon=...&url=...
   title 为空时退化为单段 /{body}（Bark 支持只发内容）。
+- url 参数（可选）：Bark 的点击跳转地址，点通知直接打开（speak 工具
+  用它带上音频 URL）。
 - 返回 Bark 的响应 code + message；失败时把 Bark 的错误原样带回。
 - key 绝不进日志、绝不出现在返回内容里：所有可能含 URL 的错误文本
   先经 _redact() 打码再输出。
@@ -19,7 +21,7 @@ tools/bark/core.py — bark_push 实现
 - 不存推送历史、不重试；失败与否由调用方（克）自行决定下一步。
 - 不校验 icon URL 可达性，Bark 端自己处理。
 
-对外暴露：bark_push(title, body, icon) → str
+对外暴露：bark_push(title, body, icon, url) → str
 ========================================
 """
 
@@ -51,7 +53,7 @@ def _make_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS)
 
 
-async def bark_push(title: str, body: str, icon: str = "") -> str:
+async def bark_push(title: str, body: str, icon: str = "", url: str = "") -> str:
     key = _bark_key()
     if not key:
         return "❌ bark_push 未配置：服务器缺少环境变量 BARK_KEY，推送功能不可用。"
@@ -66,11 +68,15 @@ async def bark_push(title: str, body: str, icon: str = "") -> str:
         path = f"/{q_title}/{q_body}"
     else:
         path = f"/{q_title or q_body}"
-    url = f"{_BARK_API_BASE}/{key}{path}"
-    params = {"icon": icon.strip()} if icon and icon.strip() else None
+    push_url = f"{_BARK_API_BASE}/{key}{path}"
+    params = {}
+    if icon and icon.strip():
+        params["icon"] = icon.strip()
+    if url and url.strip():
+        params["url"] = url.strip()
     try:
         async with _make_client() as client:
-            resp = await client.get(url, params=params)
+            resp = await client.get(push_url, params=params or None)
     except Exception as e:
         logger.warning(f"[bark_push] request failed: {_redact(f'{type(e).__name__}: {e}')}")
         return f"❌ Bark 推送请求失败：{_redact(f'{type(e).__name__}: {e}')}"
