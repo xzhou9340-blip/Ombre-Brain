@@ -424,17 +424,30 @@ async def _merge_or_create_inner(
                     rt.dehydrator.invalidate_cache(bucket["content"])
                 except Exception:
                     pass
-                # --- 合并后刷新 embedding（best-effort，合并路径不返回 embed 警告）---
+                # --- 合并后刷新 embedding（降级不报错，但失败必须可见：---
+                # 记日志 + 把 embed 警告带回调用方，否则向量停留在合并前的旧文本，
+                # 语义检索悄悄失准，还会在 pulse 对账里积累「缺失/过期」漂移）---
+                merge_embed_warn = ""
                 try:
-                    await rt.embedding_engine.generate_and_store(bucket["id"], merged)
-                except Exception:
-                    pass
+                    embed_ok = await rt.embedding_engine.generate_and_store(bucket["id"], merged)
+                except Exception as _embed_exc:
+                    embed_ok = False
+                    rt.logger.warning(
+                        f"op=merge_or_create phase=branch branch=merge_embed_fail "
+                        f"bucket_id={bucket['id']} reason={type(_embed_exc).__name__}: {_embed_exc}"
+                    )
+                if not embed_ok:
+                    merge_embed_warn = _EMBED_WARN
+                    rt.logger.warning(
+                        f"op=merge_or_create phase=branch branch=merge_embed_degrade "
+                        f"bucket_id={bucket['id']} reason=embedding_not_refreshed_after_merge"
+                    )
                 rt.logger.info(
                     f"op=merge_or_create phase=branch branch=merge bucket_id={bucket['id']} "
                     f"raw_merge={int(raw_merge)} source_tool={source_tool or '_'} "
-                    f"score={existing[0].get('score', 0):.3f}"
+                    f"score={existing[0].get('score', 0):.3f} embed_ok={int(embed_ok)}"
                 )
-                return bucket["id"], True, ""
+                return bucket["id"], True, merge_embed_warn
             except Exception as e:
                 rt.logger.warning(f"Merge failed, creating new / 合并失败，新建: {e}")
 

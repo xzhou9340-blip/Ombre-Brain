@@ -150,11 +150,27 @@ async def trace_core(
     if not success:
         return f"修改失败: {bucket_id}"
 
+    # content 改写后重建 embedding。失败不回滚正文（降级），但必须显式可见：
+    # 记日志 + 在返回文本里提示，否则向量还是旧正文的，语义检索悄悄失准。
+    embed_rebuild_warn = ""
     if "content" in updates:
         try:
-            await rt.embedding_engine.generate_and_store(bucket_id, updates["content"])
-        except Exception:
-            pass
+            embed_ok = await rt.embedding_engine.generate_and_store(bucket_id, updates["content"])
+        except Exception as _embed_exc:
+            embed_ok = False
+            rt.logger.warning(
+                f"op=trace phase=embed_rebuild_fail bucket_id={bucket_id} "
+                f"reason={type(_embed_exc).__name__}: {_embed_exc}"
+            )
+        if not embed_ok:
+            embed_rebuild_warn = (
+                "\n⚠️ 正文已替换，但 embedding 重建失败：该桶暂不参与语义检索，"
+                "仅支持关键词匹配。请检查 OMBRE_EMBED_API_KEY，或稍后用相同 content 重试。"
+            )
+            rt.logger.warning(
+                f"op=trace phase=embed_rebuild_degrade bucket_id={bucket_id} "
+                f"reason=embedding_not_refreshed_after_content_replace"
+            )
 
     # --- plan 桶人工/AI 显式 resolve → 联动 related_bucket / resolved_by ---
     # rule.md §1：plan 是承诺，承诺被显式放下，承载它的事件桶也不该再浮上来。
@@ -187,4 +203,4 @@ async def trace_core(
             changed += " → 已取消隐藏，重新参与浮现"
     if cascaded:
         changed += f" → 同步把 {len(cascaded)} 个关联事件桶也标为已放下（{', '.join(cascaded)}）"
-    return f"已修改记忆桶 {bucket_id}: {changed}"
+    return f"已修改记忆桶 {bucket_id}: {changed}{embed_rebuild_warn}"
