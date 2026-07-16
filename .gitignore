@@ -8,6 +8,7 @@ __pycache__/
 .coverage.*
 config.yaml.dir/
 .env
+声音库.md
 .venv/
 .venv*/
 venv/
