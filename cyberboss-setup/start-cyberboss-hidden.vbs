@@ -7,21 +7,20 @@
 '
 ' 你只需要改下面这一行 CYBERBOSS_DIR = cyberboss 的克隆目录(不是你的项目目录)。
 
-' ====== 需要你修改的地方 ======
-Dim CYBERBOSS_DIR
-CYBERBOSS_DIR = "C:\Users\你的用户名\cyberboss"   ' <-- 改成你 git clone cyberboss 后的目录
-' ================================
+' ====== 需要你确认的地方(默认已按 D 盘方案填好)======
+Dim CYBERBOSS_DIR, LOG_DIR
+CYBERBOSS_DIR = "D:\cyberboss"        ' cyberboss 的克隆目录(不是你的项目目录)
+LOG_DIR       = "D:\cyberboss-data"   ' 与 .env 里的 CYBERBOSS_STATE_DIR 保持一致
+' =====================================================
 
-Dim shell, fso, homeDir, stateDir, logPath, cmd
+Dim shell, fso, logPath, cmd
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
-homeDir = shell.ExpandEnvironmentStrings("%USERPROFILE%")
-stateDir = homeDir & "\.cyberboss"
-If Not fso.FolderExists(stateDir) Then
-  fso.CreateFolder(stateDir)
+If Not fso.FolderExists(LOG_DIR) Then
+  fso.CreateFolder(LOG_DIR)
 End If
-logPath = stateDir & "\cyberboss-autostart.log"
+logPath = LOG_DIR & "\cyberboss-autostart.log"
 
 ' cd 进 cyberboss 目录并启动 shared:start,把标准输出/错误追加到日志文件,方便排查。
 cmd = "cmd /c cd /d """ & CYBERBOSS_DIR & """ && npm run shared:start >> """ & logPath & """ 2>&1"
