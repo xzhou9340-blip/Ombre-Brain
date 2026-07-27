@@ -14,12 +14,16 @@
 
 ### 新增 / Added
 
+- 新增 **diary 分区**：独立 SQLite 表 `diary`（`<buckets_dir>/diary.db`，字段 `id / date / content / created_at`，`date` 建索引），不与记忆桶混用。用途是交接班——新开一个会话窗口时让 AI 快速知道最近几天在经历什么。判断标准写进了工具描述：「这件事明天还在不在？」在 → diary（出差到周五、胃疼两天、跟同事闹别扭没和好），不在 → 不记。diary 记「正在发生」，桶记「已经改变」。
+- 新增 2 个 MCP 工具（实现在 `src/tools/diary/`）：`diary_write(content, date?)` 追加一条（`date` 是记录归属的日期，默认今天，同一天可多条、追加不覆盖，返回写入的 id 与 date）；`diary_read(days?)` 返回最近 N 天（默认 3，上限 7），按日期正序、同日按写入顺序，按天分组、空日期跳过，无记录时返回「最近 N 天没有记录」而不报错。
+- diary 是纯写入纯读取：不调 dehydrator、不拆桶、不打标签、不建向量索引、不参与语义检索 / breath / dream / decay。embedding、脱水接口 429 挂掉时 diary 依然可用——这是它存在的前提之一。
 - 共读（read-along）接入：新增 5 个 MCP 工具 `reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations`（实现在 `src/tools/reading/`），包装 read-along 后端的门禁与批注端点。未解锁章节连标题都取不到——防剧透门禁是 read-along 服务端硬约束，工具层只转译不绕过。
 - read-along 以独立 Render Web Service 部署：vendor 进 `read-along/`（上游 MIT，基于 commit `5043a65`），适配 PaaS——监听 `0.0.0.0:$PORT`、Node 自托管 reader.html、`READING_WEB_TOKEN` 随机路径访问控制（除 `/health` 外全部挂 `/<token>/` 前缀）、`DATA_DIR` 指向 persistent disk（Render 容器磁盘临时，不挂盘数据必丢）。推送保持 DRY-RUN（两个推送开关都不设，只写 outbox.log）。
 - `render.yaml` 增加 `read-along` 服务定义（`rootDir` + 1GB 持久盘 + token 自动生成），ombre-brain 服务增加 `READING_API_BASE`（`sync: false`，值为 read-along 公网地址含 token 路径）。工具每次调用现读该变量，在其后拼 `/api/...`。
 
 ### 测试 / Tests
 
+- 新增 `tests/test_diary.py`（16 例，跑真实 SQLite、零 mock 零网络）：默认今天 / 显式 date / 同日追加不覆盖、`created_at` 与 `date` 分离、独立 `diary` 表 + `idx_diary_date` 且不写进桶目录、按天分组正序输出、空日期跳过、days 上限 7 下限 1 与非法值回默认、无记录不报错、非法日期与空内容的可读提示，以及「dehydrator / embedding / decay / bucket_mgr 一旦被碰就断言失败」的依赖隔离用例。
 - 新增 `tests/test_reading_tools.py`：用进程内假 read-along 后端覆盖 5 个工具的 URL 拼接、门禁语义（未解锁内容绝不出现）、409/404 指引转译、回复署名 `ai`、带 token 路径前缀的 base URL、连接失败排查文案。
 
 ## 2.4.10
