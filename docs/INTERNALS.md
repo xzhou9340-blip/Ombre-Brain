@@ -144,7 +144,9 @@ src/tools/
 ├── trace/         # core（metadata/resolved/pinned/delete/content 替换/计划状态等全在这）
 ├── anchor/        # core：anchor_set / anchor_release / pulse
 ├── plan/          # core：plan_create / letter_write / letter_read
-└── i/             # core：自我认知条目读写（dispatch=i_core），iter 2.x 新增
+├── i/             # core：自我认知条目读写（dispatch=i_core），iter 2.x 新增
+└── diary/         # core：diary_write / diary_read —— 独立 SQLite 表，不走 bucket_mgr、
+                 #   不碰 dehydrator/embedding，外部 API 挂掉也能用
 ```
 
 路线：`server.X(...)` → `tools.X.dispatch(...)`（`__init__.py`）→ 分支函数。所有分支只通过 `from .. import _runtime as rt` 读依赖，不能 `import server`。`server.py` 保留了 `_check_content_size / _check_pinned_quota / _max_bucket_bytes / _max_pinned / _merge_or_create / _check_duplicate_for / _check_plan_resolution` 这几个别名，让仍引用它们的调用点不需要改。
@@ -267,6 +269,11 @@ feel 桶自身：
 > 回灌进 `mcp`，三种 transport（stdio / sse / streamable-http）都只对外暴露一条 `/mcp`。
 > - 高频 5 个 —— `breath` / `hold` / `grow` / `trace` / `dream`
 > - 低频 7 个 —— `anchor` / `release` / `pulse` / `plan` / `letter_write` / `letter_read` / `I`
+>
+> 本节标题的「12 个」指的是上面这批**记忆核心**工具（也是 `LegacyCompatibilityContract` 钉住的那 12 个）。
+> 之后加进来的旁支工具（`diary_write` / `diary_read`、`reading_*`、`speak` / `bark_push` / `peek` /
+> `phone_activity_query`）同样注册在 `mcp_extra` 上、同样从 `/mcp` 暴露，只是不算进这份记忆核心契约。
+> 其中 diary 见 §3.12。
 
 ### 3.1 `breath` — 检索/浮现
 
@@ -379,6 +386,30 @@ feel 桶自身：
 - `content` 空 或 `read=True` → **读取模式**，返回已积累的全部自我认知（按 `limit` 截断，默认 20 条）。
 - `content` 非空 → **写入模式**，记一条自我认知；`aspect` 可选维度：`nature`(本质) / `values`(看重的) / `patterns`(规律) / `limits`(局限) / `becoming`(在变成什么) / `uncertainty`(不确定的) / `stance`(立场)。
 - I 条目写入时带 `dont_surface=True`：**不参与普通 `breath` / `dream`**；只在 `SessionStart` 时自动附带最近 3 条。
+
+### 3.12 `diary_write` / `diary_read` — diary 分区（独立表）
+
+实现在 `tools/diary/core.py`。**不复用 buckets**：独立 SQLite 库 `<buckets_dir>/diary.db`，单表 `diary`。
+
+```sql
+CREATE TABLE IF NOT EXISTS diary (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    date       DATE NOT NULL,        -- 记录归属的日期（YYYY-MM-DD），不是写入时间
+    content    TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL    -- 实际写入时间（本地 ISO，秒级）
+);
+CREATE INDEX IF NOT EXISTS idx_diary_date ON diary(date);
+```
+
+语义边界：桶装「已经改变关系形状」的事，diary 装「正在发生、明天还在」的事（出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好）。判断标准「这件事明天还在不在？」写进了两个工具的 MCP description，模型侧靠它分流。用途是**交接班**：新开会话窗口时快速知道最近几天在经历什么。
+
+`diary_write(content, date="")` —— 追加一条，返回 `📔 diary #<id> <date>`。`date` 缺省取本地今天；格式非 `YYYY-MM-DD` 时返回可读提示、不写库。同一 `date` 允许多条，**追加不覆盖**。
+
+`diary_read(days=3)` —— `days` 收进 `[1, 7]`（越界钳到边界，非法值回默认 3）；窗口为 `date >= today-(days-1)`，**不设上界**，所以提前写的未来日期条目不会被静默吞掉。排序 `date ASC, id ASC`（同日按写入顺序），按天分组输出，没有记录的日期不占版面。无结果返回「最近 N 天没有记录。」——正常返回，不是错误。
+
+不参与的东西（这是 diary 的设计前提，不是省略）：不调 `dehydrator`、不拆桶、不打标签、不建向量索引、不参与语义检索 / `breath` / `dream` / `decay`。整条路径只碰本地 SQLite，**脱水/embedding 接口 429 挂掉时 diary 依然可写可读**。`tests/test_diary.py` 用「碰到就断言失败」的替身把这条隔离钉住。
+
+每次调用开一个 SQLite 连接、用完即关（调用频次极低），避免 `buckets_dir` 变更后长连接指着旧路径。不提供删除/编辑接口，不支持 7 天以上的查询。
 
 ---
 

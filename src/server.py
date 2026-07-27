@@ -22,7 +22,7 @@ web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/too
 - 不写 HTTP 路由处理（全在 web/* 下）；不写 LLM prompt（dehydrator 负责）
 - 不直接读写桶文件（bucket_manager 负责）
 
-对外暴露：mcp/mcp_extra 两个实例 + 21 个 @mcp*.tool() 函数；HTTP 路由在 src/web/*
+对外暴露：mcp/mcp_extra 两个实例 + 26 个 @mcp*.tool() 函数；HTTP 路由在 src/web/*
 ========================================
 """
 
@@ -74,6 +74,7 @@ from tools.reading import core as _t_reading
 from tools import bark as _t_bark
 from tools import phone_activity as _t_phone
 from tools import speak as _t_speak
+from tools import diary as _t_diary
 from tools._common import (
     check_content_size as _check_content_size,
     check_pinned_quota as _check_pinned_quota,
@@ -859,6 +860,30 @@ async def I(
         _t_i.dispatch(content=content, aspect=aspect, read=read, limit=limit),
         op="I",
         args={"content_len": len(content or ""), "aspect": aspect, "read": read, "limit": limit},
+    )
+
+
+# =============================================================
+# diary —— 独立分区（独立 SQLite 表），实现见 tools/diary/core.py
+# 纯写入纯读取：不脱水、不拆桶、不建向量索引，任何外部 API 挂掉都不影响它。
+# =============================================================
+@mcp_extra.tool()
+async def diary_write(content: str, date: Optional[str] = "") -> str:
+    """记一条日常进展,用于交接班——让下一个会话窗口知道她/他最近几天在经历什么。判断标准只有一句:「这件事明天还在不在?」在→写 diary(出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好);不在→不要记(今天午饭吃了什么、路上看见一只猫)。diary 记「正在发生」,记忆桶记「已经改变」——同一天的事可以分别进两个地方,不要拿 diary 替代 hold。content=一句到一段;date 可选 YYYY-MM-DD,是这条记录归属的日期(默认今天,补记昨天的事就传昨天)。同一天可以写多条,追加不覆盖。"""
+    return await _with_notice(
+        _t_diary.diary_write(content=content, date=date),
+        op="diary_write",
+        args={"content_len": len(content or ""), "date": date},
+    )
+
+
+@mcp_extra.tool()
+async def diary_read(days: Optional[int] = 3) -> str:
+    """读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。"""
+    return await _with_notice(
+        _t_diary.diary_read(days=days),
+        op="diary_read",
+        args={"days": days},
     )
 
 
