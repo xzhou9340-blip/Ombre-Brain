@@ -249,8 +249,13 @@ async def test_oversized_content_is_split_into_multiple_buckets(wired):
 # -------------------- ⑥ 落桶也失败时不静默吞 --------------------
 
 @pytest.mark.asyncio
-async def test_when_even_the_bucket_write_fails_the_original_text_comes_back(wired, monkeypatch):
-    """embedding 也挂了 → create() 删文件并抛 → 至少把原文还给调用方。"""
+async def test_when_even_the_bucket_write_fails_content_still_survives(wired, monkeypatch):
+    """embedding 也挂了 → create() 删文件并抛 → 落到待处理区（§1.4）。
+
+    §1.2 单独交付时这里是「把原文回吐给调用方」；§1.4 加了待处理区之后，
+    这条路径升级为落地存储，回吐降级成待处理区也写不进去时的最后手段
+    （那条在 tests/test_pending_store.py 覆盖）。"""
+    import pending_store
     from bucket_manager import BucketManager
 
     bm, _emb, cfg = wired
@@ -260,8 +265,11 @@ async def test_when_even_the_bucket_write_fails_the_original_text_comes_back(wir
 
     res = await grow_dispatch(_LONG)
 
-    assert "没有存下来" in res
-    assert _LONG.strip() in res           # 原文原样回吐
+    assert "待处理区" in res
+    assert "没有丢" in res
+    rows = pending_store.list_pending(cfg["buckets_dir"])
+    assert len(rows) == 1
+    assert rows[0]["content"].strip() == _LONG.strip()
     assert len(await _undigested(bm)) == 0
 
 

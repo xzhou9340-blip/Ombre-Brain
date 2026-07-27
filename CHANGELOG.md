@@ -17,7 +17,12 @@
 - **grow 兜底（任务书 §1.2）**：`digest()` / `analyze()` 挂掉时不再抛 `RuntimeError` 丢内容，降级为原文整存——不拆桶、打内部标签 `__undigested__`、桶名带「未拆桶」，接口恢复后可按标签捞回来重新 grow。实现在 `src/tools/grow/fallback.py`，`core.py`（长内容 digest）与 `shortpath.py`（短内容 analyze）两条分支都接上了（任务书只提了前者，后者有同一个洞）。
 - 降级路径全程不碰 LLM：不调 dehydrator、也不走 `merge_or_create`（后者会 search→可能把原文合并进别的桶，冲散内容、事后更难找），直接 `bucket_mgr.create` 落桶，元数据用固定默认值。原文超过单桶上限时按 UTF-8 字节机械切分成多条，不在多字节字符中间断开，一个字不丢。
 - 错误文案区分限流与配置问题：命中 `429` / `rate limit` / `quota` 等特征时明说「被限流，不是 key 没配」。旧文案一律写「API key 未配置」，2026-07-27 的实际故障是 429，属误导。
-- 连落桶都失败时（最常见是 embedding 接口同样挂着——`bucket_manager.create()` 在 `_sync_embedding` 失败时会删文件并抛）把原文原样回吐给调用方，不静默吞。**注意：这种双挂场景下内容仍然无法落盘**，绕过 embedding 硬校验是 `bucket_manager` 明确写死的设计决定，未在本次改动中破例。
+- 连落桶都失败时（最常见是 embedding 接口同样挂着——`bucket_manager.create()` 在 `_sync_embedding` 失败时会删文件并抛）转存下面的待处理区（§1.4），不静默吞。绕过 embedding 硬校验是 `bucket_manager` 明确写死的设计决定，本次未破例——待处理区是绕开这条约束又不违反它的做法。
+- **待处理区（任务书 §1.4）**：新增 `src/pending_store.py` —— 独立本地 SQLite `<buckets_dir>/pending.db`，单表 `pending_writes`（原文 / 来源工具 / 失败原因 / 时间戳 / 状态，另预留 `migrated_at`、`bucket_id` 两列给阶段二回填，省一次 schema 迁移）。仿 diary 的隔离做法：不建向量、不打标签、不调 dehydrator、不碰 bucket_mgr——它存在的全部理由就是「那些都挂了的时候还能写进去」。
+- grow 降级落桶失败时（compress 与 embed 同源，一次 429 两条都挂 → `create()` 删文件并抛）内容转存待处理区，返回值给出待处理 id 并说明「在对账补建之前 breath/dream 搜不到」。待处理区也写不进去时才回吐原文，作为最后一道防线。
+- `record()` 任何情况下都不抛异常（路径不可写返回 0）：调用方是降级路径，主链路已经挂了，再抛一次只会把最后一点内容也弄丢。
+- 本次只做「写入」这一半。对账补建留到阶段二，与 §2.1 的 letter `PENDING_MIGRATE` 回迁**合并成同一个函数**，不写两套；模块内加了守卫测试，冒出 migrate/reconcile 类入口即失败。
+- 同时提供 `is_legacy_pending_title()` 认旧标记（子串判定，不匹配全名——历史标题过了 `sanitize_name`，写死全名一定会漏）。已知历史数据 letter `ea47fc1b4ee5` 的实际标题写进了测试，确保将来的对账函数不会漏掉它。
 - **工具描述加厚（任务书 §1.3）**：23 个 MCP 工具的 description 统一以【口语同义词】开头（如 breath → 检索/回忆/想起/查记忆/她说过什么/以前提过）。客户端延迟加载工具，搜不到就调不到——2026-07-27 实测 breath 搜三次均未命中，只能用 pulse 绕过。前缀只加在前面，原有参数契约一字未动。
 - 未做：任务书 §1.3 顺带提的「把长期没被调用过的工具合并或下线」。删工具不可逆、与总原则 3「不要重构现有代码」冲突，且 `LegacyCompatibilityContract` 钉死了 12 个工具名；另外仓库里没有调用频次数据，无从判断哪个「长期没被调用」。需要单独决策。
 - 新增 **diary 分区**：独立 SQLite 表 `diary`（`<buckets_dir>/diary.db`，字段 `id / date / content / created_at`，`date` 建索引），不与记忆桶混用。用途是交接班——新开一个会话窗口时让 AI 快速知道最近几天在经历什么。判断标准写进了工具描述：「这件事明天还在不在？」在 → diary（出差到周五、胃疼两天、跟同事闹别扭没和好），不在 → 不记。diary 记「正在发生」，桶记「已经改变」。
@@ -29,6 +34,7 @@
 
 ### 测试 / Tests
 
+- 新增 `tests/test_pending_store.py`（21 例）：表结构含任务书要求的五个字段、`record()` 在坏路径下返回 0 不抛、模块不 import 任何 LLM/桶层依赖、运行时依赖全换成炸弹替身仍能写入、grow 双挂端到端落待处理区且 `list_all` 看不到它、待处理区也失败时回吐原文、`PENDING_MIGRATE` 历史标记（含 `ea47fc1b4ee5` 的真实标题）判定，以及「本模块不得出现补建入口」的守卫。
 - 新增 `tests/test_grow_fallback.py`（12 例，真实落盘 + LLM/embedding 替身，零网络）：长短两条路径的降级、降级路径不碰 LLM（dehydrator 设成「碰到就断言失败」）、429 与 key 文案区分、超上限机械切分后拼回原文、落桶失败时原文回吐、正常路径不受影响。
 - 新增 `tests/test_tool_description_keywords.py`（10 例）：23 个工具都带同义词前缀、任务书点名的五组词逐个落位、前缀没吃掉原有描述，以及 `src/server.py` 的 CRLF 行尾保持不变——用默认模式读写会把 1262 行整篇重写、掩盖真实改动，这条把那次事故钉住。
 - 新增 `tests/test_diary.py`（16 例，跑真实 SQLite、零 mock 零网络）：默认今天 / 显式 date / 同日追加不覆盖、`created_at` 与 `date` 分离、独立 `diary` 表 + `idx_diary_date` 且不写进桶目录、按天分组正序输出、空日期跳过、days 上限 7 下限 1 与非法值回默认、无记录不报错、非法日期与空内容的可读提示，以及「dehydrator / embedding / decay / bucket_mgr 一旦被碰就断言失败」的依赖隔离用例。
