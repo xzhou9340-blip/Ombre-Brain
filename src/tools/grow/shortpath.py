@@ -7,7 +7,8 @@ tools/grow/shortpath.py — grow 短内容快速路径
 merge_or_create，省一次 LLM 拆分调用。
 
 关键行为：
-- 调 analyze 拿 domain/valence/arousal/tags/suggested_name
+- 调 analyze 拿 domain/valence/arousal/tags/suggested_name；
+  analyze 挂掉时降级走 fallback.grow_fallback 原文整存，不抛异常丢内容
 - 用 raw_merge=True 与 hold 对齐：保留原文不压缩（修了 2.0 之前
   短日记被 LLM 偷偷压缩的 bug）
 - 写完 fire-and-forget：plan 自动闭环 + 新桶疑似重复扫描
@@ -25,6 +26,7 @@ import uuid
 
 from .. import _runtime as rt
 from .._common import merge_or_create, check_duplicate_for, check_plan_resolution
+from .fallback import grow_fallback
 
 
 async def grow_shortpath(content: str) -> str:
@@ -32,9 +34,9 @@ async def grow_shortpath(content: str) -> str:
     try:
         analysis = await rt.dehydrator.analyze(content)
     except Exception as e:
-        raise RuntimeError(
-            f"API key 未配置或调用失败，打标无法完成，桶未创建。请检查 OMBRE_COMPRESS_API_KEY。（错误：{e}）"
-        ) from e
+        # 与 core.py 同因：打标接口挂掉时不再抛异常丢内容，降级为原文整存。
+        rt.logger.error(f"grow shortpath analyze failed, falling back / 打标失败，降级整存: {e}")
+        return await grow_fallback(content, reason=str(e))
     importance = analysis.get("importance", 5) if isinstance(analysis.get("importance"), int) else 5
     # iter 2.0：短路径也是一次 grow 调用 → 仍生成 batch_id，便于 dashboard 聚合，
     # 即使 batch 里只有一条记录也保留字段，schema 一致。

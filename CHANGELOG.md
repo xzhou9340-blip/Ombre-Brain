@@ -14,6 +14,12 @@
 
 ### 新增 / Added
 
+- **grow 兜底（任务书 §1.2）**：`digest()` / `analyze()` 挂掉时不再抛 `RuntimeError` 丢内容，降级为原文整存——不拆桶、打内部标签 `__undigested__`、桶名带「未拆桶」，接口恢复后可按标签捞回来重新 grow。实现在 `src/tools/grow/fallback.py`，`core.py`（长内容 digest）与 `shortpath.py`（短内容 analyze）两条分支都接上了（任务书只提了前者，后者有同一个洞）。
+- 降级路径全程不碰 LLM：不调 dehydrator、也不走 `merge_or_create`（后者会 search→可能把原文合并进别的桶，冲散内容、事后更难找），直接 `bucket_mgr.create` 落桶，元数据用固定默认值。原文超过单桶上限时按 UTF-8 字节机械切分成多条，不在多字节字符中间断开，一个字不丢。
+- 错误文案区分限流与配置问题：命中 `429` / `rate limit` / `quota` 等特征时明说「被限流，不是 key 没配」。旧文案一律写「API key 未配置」，2026-07-27 的实际故障是 429，属误导。
+- 连落桶都失败时（最常见是 embedding 接口同样挂着——`bucket_manager.create()` 在 `_sync_embedding` 失败时会删文件并抛）把原文原样回吐给调用方，不静默吞。**注意：这种双挂场景下内容仍然无法落盘**，绕过 embedding 硬校验是 `bucket_manager` 明确写死的设计决定，未在本次改动中破例。
+- **工具描述加厚（任务书 §1.3）**：23 个 MCP 工具的 description 统一以【口语同义词】开头（如 breath → 检索/回忆/想起/查记忆/她说过什么/以前提过）。客户端延迟加载工具，搜不到就调不到——2026-07-27 实测 breath 搜三次均未命中，只能用 pulse 绕过。前缀只加在前面，原有参数契约一字未动。
+- 未做：任务书 §1.3 顺带提的「把长期没被调用过的工具合并或下线」。删工具不可逆、与总原则 3「不要重构现有代码」冲突，且 `LegacyCompatibilityContract` 钉死了 12 个工具名；另外仓库里没有调用频次数据，无从判断哪个「长期没被调用」。需要单独决策。
 - 新增 **diary 分区**：独立 SQLite 表 `diary`（`<buckets_dir>/diary.db`，字段 `id / date / content / created_at`，`date` 建索引），不与记忆桶混用。用途是交接班——新开一个会话窗口时让 AI 快速知道最近几天在经历什么。判断标准写进了工具描述：「这件事明天还在不在？」在 → diary（出差到周五、胃疼两天、跟同事闹别扭没和好），不在 → 不记。diary 记「正在发生」，桶记「已经改变」。
 - 新增 2 个 MCP 工具（实现在 `src/tools/diary/`）：`diary_write(content, date?)` 追加一条（`date` 是记录归属的日期，默认今天，同一天可多条、追加不覆盖，返回写入的 id 与 date）；`diary_read(days?)` 返回最近 N 天（默认 3，上限 7），按日期正序、同日按写入顺序，按天分组、空日期跳过，无记录时返回「最近 N 天没有记录」而不报错。
 - diary 是纯写入纯读取：不调 dehydrator、不拆桶、不打标签、不建向量索引、不参与语义检索 / breath / dream / decay。embedding、脱水接口 429 挂掉时 diary 依然可用——这是它存在的前提之一。
@@ -23,6 +29,8 @@
 
 ### 测试 / Tests
 
+- 新增 `tests/test_grow_fallback.py`（12 例，真实落盘 + LLM/embedding 替身，零网络）：长短两条路径的降级、降级路径不碰 LLM（dehydrator 设成「碰到就断言失败」）、429 与 key 文案区分、超上限机械切分后拼回原文、落桶失败时原文回吐、正常路径不受影响。
+- 新增 `tests/test_tool_description_keywords.py`（10 例）：23 个工具都带同义词前缀、任务书点名的五组词逐个落位、前缀没吃掉原有描述，以及 `src/server.py` 的 CRLF 行尾保持不变——用默认模式读写会把 1262 行整篇重写、掩盖真实改动，这条把那次事故钉住。
 - 新增 `tests/test_diary.py`（16 例，跑真实 SQLite、零 mock 零网络）：默认今天 / 显式 date / 同日追加不覆盖、`created_at` 与 `date` 分离、独立 `diary` 表 + `idx_diary_date` 且不写进桶目录、按天分组正序输出、空日期跳过、days 上限 7 下限 1 与非法值回默认、无记录不报错、非法日期与空内容的可读提示，以及「dehydrator / embedding / decay / bucket_mgr 一旦被碰就断言失败」的依赖隔离用例。
 - 新增 `tests/test_reading_tools.py`：用进程内假 read-along 后端覆盖 5 个工具的 URL 拼接、门禁语义（未解锁内容绝不出现）、409/404 指引转译、回复署名 `ai`、带 token 路径前缀的 base URL、连接失败排查文案。
 

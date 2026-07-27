@@ -7,7 +7,8 @@ tools/grow/core.py — grow 长内容主路径（digest + merge）
 事件项，每条独立尝试 merge_or_create。
 
 关键行为：
-- digest 失败（API key 不可用）时直接 RuntimeError，不创建任何桶
+- digest 失败（限流 / key 不可用 / 网络）时不再抛异常丢内容，
+  降级走 fallback.grow_fallback 原文整存（不拆桶），见该文件
 - 逐条调 merge_or_create（grow 路径用 LLM merge，会压缩老+新）
 - iter 2.0：每次 grow 调用生成一个 ``grow_batch_id``，同批次新建桶共享，
   source_tool 一律为 ``grow``；合并到的老桶不改 source_tool
@@ -34,16 +35,17 @@ from .._common import (
     check_duplicate_for,
     check_plan_resolution,
 )
+from .fallback import grow_fallback
 
 
 async def grow_core(content: str) -> str:
     try:
         items = await rt.dehydrator.digest(content)
     except Exception as e:
-        rt.logger.error(f"Diary digest failed / 日记整理失败: {e}")
-        raise RuntimeError(
-            f"API key 未配置或调用失败，日记拆分无法完成，桶未创建。请检查 OMBRE_COMPRESS_API_KEY。（错误：{e}）"
-        ) from e
+        # 2026-07-27：这里原本直接 raise，429 时桶未创建、内容全丢。
+        # 现在降级为原文整存（不拆桶），宁可粗糙也不能丢。
+        rt.logger.error(f"Diary digest failed, falling back / 日记整理失败，降级整存: {e}")
+        return await grow_fallback(content, reason=str(e))
 
     if not items:
         return "内容为空或整理失败。"

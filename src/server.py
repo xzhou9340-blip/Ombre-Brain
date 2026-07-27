@@ -8,10 +8,11 @@ DecayEngine / EmbeddingEngine / ImportEngine，把它们注入 tools._runtime �
 web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/tools/<工具>/ 下面）。
 
 关键行为：
-- 启动后暴露 21 个 MCP 工具：breath/hold/grow/trace/anchor/release/
-  pulse/plan/letter_write/letter_read/dream/I/peek/bark_push/speak/
-  phone_activity_query/reading_progress/reading_text/reading_search/
-  reading_annotate/reading_annotations；每个入口 ≤ 10 行，只负责转发
+- 启动后暴露 23 个 MCP 工具：breath/hold/grow/trace/anchor/release/
+  pulse/plan/letter_write/letter_read/dream/I/diary_write/diary_read/
+  peek/bark_push/speak/phone_activity_query/reading_progress/reading_text/
+  reading_search/reading_annotate/reading_annotations；每个入口 ≤ 10 行，只负责转发
+- 每个 description 以【口语同义词】开头：客户端延迟加载工具，搜不到就调不到
 - Dashboard / HTTP 路由全部已拆分到 src/web/<域>.py（每个模块 register(mcp)），
   本文件仅在启动时调用 web.register_all(mcp) 装配；共享依赖见 web/_shared.py
 - 仍保留在本文件：进程启动、引擎初始化、GitHub 后台同步循环、Webhook 推送、
@@ -570,7 +571,7 @@ async def breath(
     importance_min: Optional[int] = -1,
     tags: Optional[str] = "",
 ) -> str:
-    """检索并返回记忆桶。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
+    """【检索 回忆 想起 记起 查记忆 她说过什么 以前提过 之前聊过 翻记录】检索并返回记忆桶。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
     return await _with_notice(
         _t_breath.dispatch(
             query=query, max_tokens=max_tokens, domain=domain,
@@ -598,7 +599,7 @@ async def hold(
     arousal: Optional[float] = -1,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """存入一条记忆(一句话级)。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
+    """【记住 存下来 别忘了 记一笔 记下来 存进记忆】存入一条记忆(一句话级)。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
     return await _with_notice(
         _t_hold.dispatch(
             content=content, tags=tags, importance=importance,
@@ -617,7 +618,7 @@ async def hold(
 
 @mcp.tool()
 async def grow(content: str) -> str:
-    """整理一段长文本(如一天的记录/一段日记/一篇总结)存入记忆,系统拆分为 2~6 条独立事件桶并各自尝试合并。短内容(<30 字)走 hold 单条快速路径,不强行拆分。"""
+    """【整理 存日记 记一大段 归档 一天的总结 别忘了】整理一段长文本(如一天的记录/一段日记/一篇总结)存入记忆,系统拆分为 2~6 条独立事件桶并各自尝试合并。短内容(<30 字)走 hold 单条快速路径,不强行拆分。"""
     return await _with_notice(
         _t_grow.dispatch(content),
         op="grow",
@@ -644,7 +645,7 @@ async def trace(
     dont_surface: Optional[int] = -1,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """修改某条记忆的元数据或内容。resolved=1=标记已放下,沉底仅在关键词触发时返回;resolved=0=重新激活;pinned=1=标记永久核心(锁 importance=10),0=取消;digested=1=标记已消化,加速淡化;content=替换桶正文并重建 embedding;delete=True=彻底删除(不可恢复);status=plan 桶状态(active/resolved/abandoned);weight=plan 承诺重量 0.0-1.0;dont_surface=1=不再出现在 breath,0=恢复;why_remembered=更新记录原因。只传需要修改的字段,-1 或空串表示不改。"""
+    """【改记忆 标记已解决 放下了 改标签 删记忆 改重要度】修改某条记忆的元数据或内容。resolved=1=标记已放下,沉底仅在关键词触发时返回;resolved=0=重新激活;pinned=1=标记永久核心(锁 importance=10),0=取消;digested=1=标记已消化,加速淡化;content=替换桶正文并重建 embedding;delete=True=彻底删除(不可恢复);status=plan 桶状态(active/resolved/abandoned);weight=plan 承诺重量 0.0-1.0;dont_surface=1=不再出现在 breath,0=恢复;why_remembered=更新记录原因。只传需要修改的字段,-1 或空串表示不改。"""
     return await _with_notice(
         _t_trace.dispatch(
             bucket_id=bucket_id, name=name, domain=domain,
@@ -667,7 +668,7 @@ async def trace(
 
 @mcp_extra.tool()
 async def peek():
-    """看看她最近分享的手机屏幕。无参数。24 小时内没有截图时返回"最近24小时她没有分享屏幕"，
+    """【看她手机 截图 她刚发了什么 看屏幕】看看她最近分享的手机屏幕。无参数。24 小时内没有截图时返回"最近24小时她没有分享屏幕"，
     否则返回上传时间 + 截图本身（image content block），你能直接看到画面。
     她通过 iOS 快捷指令"给克看"上传，服务端已压缩到长边 1000px。
     """
@@ -701,7 +702,7 @@ async def peek():
 
 @mcp_extra.tool()
 async def bark_push(title: str, body: str, icon: Optional[str] = "") -> str:
-    """给她的 iPhone 发一条 Bark 推送。title=标题,body=内容,icon=可选的图标图片 URL。
+    """【推送 发通知 提醒她 手机弹窗】给她的 iPhone 发一条 Bark 推送。title=标题,body=内容,icon=可选的图标图片 URL。
     中文会自动 URL 编码;成功时返回 Bark 的响应码和 message,失败时把 Bark 的错误原样带回。
     依赖服务器环境变量 BARK_KEY,未配置时返回提示而不报错。"""
     return await _with_notice(
@@ -717,7 +718,7 @@ async def bark_push(title: str, body: str, icon: Optional[str] = "") -> str:
 @mcp_extra.tool()
 async def speak(text: str, stability: Optional[float] = None,
                 style: Optional[float] = None, speed: Optional[float] = None) -> str:
-    """给她发一条语音(用克的声音念出来),供克在对话里主动发语音用。
+    """【发语音 说话 念给她听 语音消息 配音】给她发一条语音(用克的声音念出来),供克在对话里主动发语音用。
     text=台词,必填:写口语化的、像当面说话的句子,不要书面腔;可以嵌入
     ElevenLabs v3 方括号情绪标签控制演绎,如 [whispers]/[sighs]/[laughs]/[excited]。
     stability/style/speed 可选,不传时用默认 0.34/0.84/1.2。
@@ -738,7 +739,7 @@ async def speak(text: str, stability: Optional[float] = None,
 
 @mcp_extra.tool()
 async def phone_activity_query(hours: Optional[int] = 24) -> str:
-    """查她最近的 app 使用记录(Supabase phone_activity 表)。hours=查最近几小时(默认 24)。
+    """【她在用什么 app 手机活动 用了多久 玩手机】查她最近的 app 使用记录(Supabase phone_activity 表)。hours=查最近几小时(默认 24)。
     返回两部分:a) 聚合=每个 app 的打开次数+最后打开时间;b) 明细=时间倒序的原始记录。
     所有时间已转成 UTC+8 并在输出里标注时区。
     依赖服务器环境变量 SUPABASE_URL / SUPABASE_SERVICE_KEY,未配置时返回提示而不报错。"""
@@ -751,7 +752,7 @@ async def phone_activity_query(hours: Optional[int] = 24) -> str:
 
 @mcp_extra.tool()
 async def anchor(bucket_id: str) -> str:
-    """把指定桶标记为 anchor(坐标系)。anchor 不主动出现在默认 breath，但 query/domain/emotion 命中时仍返回。硬上限 24，已满时拒绝并提示先 release。"""
+    """【设为坐标系 钉住 定为基准 锚点】把指定桶标记为 anchor(坐标系)。anchor 不主动出现在默认 breath，但 query/domain/emotion 命中时仍返回。硬上限 24，已满时拒绝并提示先 release。"""
     return await _with_notice(
         _t_anchor.anchor_set(bucket_id),
         op="anchor",
@@ -761,7 +762,7 @@ async def anchor(bucket_id: str) -> str:
 
 @mcp_extra.tool()
 async def release(bucket_id: str) -> str:
-    """解除指定桶的 anchor 标记。桶恢复为普通状态，重新参与默认 breath；pinned 状态保留。"""
+    """【取消坐标系 解锚 放开 不当基准了】解除指定桶的 anchor 标记。桶恢复为普通状态，重新参与默认 breath；pinned 状态保留。"""
     return await _with_notice(
         _t_anchor.anchor_release(bucket_id),
         op="release",
@@ -771,7 +772,7 @@ async def release(bucket_id: str) -> str:
 
 @mcp_extra.tool()
 async def pulse(include_archive: Optional[bool] = False) -> str:
-    """返回记忆系统状态摘要:固化/动态/衰减/归档桶数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
+    """【自检 系统状态 有多少条记忆 为什么搜不到 记忆库体检】返回记忆系统状态摘要:固化/动态/衰减/归档桶数量、总占用、衰减引擎运行状态,以及所有桶的摘要列表。include_archive=True 同时返回归档区。"""
     return await _with_notice(
         _t_anchor.pulse(include_archive=include_archive),
         op="pulse",
@@ -787,7 +788,7 @@ async def plan(
     weight: Optional[float] = 0.5,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减、不出现在普通 breath,仅在 dream 末尾的 active 段返回;后续 hold/grow 写入新事件时系统自动判断已登记的 plan 是否完成。"""
+    """【待办 答应过 还没做完 欠着的 承诺 要跟进】登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减、不出现在普通 breath,仅在 dream 末尾的 active 段返回;后续 hold/grow 写入新事件时系统自动判断已登记的 plan 是否完成。"""
     return await _with_notice(
         _t_plan.plan_create(
             content=content, status=status, related_bucket=related_bucket,
@@ -811,7 +812,7 @@ async def letter_write(
     date: Optional[str] = "",
     ai_name: Optional[str] = "",
 ) -> str:
-    """写入一封信。author 必填:\"user\"=用户一方写的,\"ai\"(或等于 ai_name)=AI 一方写的,也可直接传任意署名字符串;user_name 可选;ai_name 可选(默认取环境变量 AI_NAME,回退 \"AI\");title/date 可选。信件原文永久保存,不压缩/不合并/不衰减,仅建向量索引;普通 breath 不返回,SessionStart 钩子会带上双方各最新一封。"""
+    """【写信 留一封信 给她写 给下一个我】写入一封信。author 必填:\"user\"=用户一方写的,\"ai\"(或等于 ai_name)=AI 一方写的,也可直接传任意署名字符串;user_name 可选;ai_name 可选(默认取环境变量 AI_NAME,回退 \"AI\");title/date 可选。信件原文永久保存,不压缩/不合并/不衰减,仅建向量索引;普通 breath 不返回,SessionStart 钩子会带上双方各最新一封。"""
     return await _with_notice(
         _t_plan.letter_write(
             author=author, content=content, user_name=user_name,
@@ -834,7 +835,7 @@ async def letter_read(
     date_from: Optional[str] = "",
     date_to: Optional[str] = "",
 ) -> str:
-    """检索历史信件。query=语义检索(可选);author 按署名过滤(\"user\"=用户侧,\"ai\"=AI 侧,也可传具体署名字符串);date_from/date_to=ISO 日期范围(可选)。无 query 时按时间倒序返回最近 limit 封。返回完整原文,不压缩。"""
+    """【读信 看以前的信 翻旧信】检索历史信件。query=语义检索(可选);author 按署名过滤(\"user\"=用户侧,\"ai\"=AI 侧,也可传具体署名字符串);date_from/date_to=ISO 日期范围(可选)。无 query 时按时间倒序返回最近 limit 封。返回完整原文,不压缩。"""
     return await _with_notice(
         _t_plan.letter_read(
             query=query, limit=limit, author=author,
@@ -855,7 +856,7 @@ async def I(
     read: Optional[bool] = False,
     limit: Optional[int] = 20,
 ) -> str:
-    """记录或读取自我认知条目。content=要记录的自我认知内容(空=进入读取模式)。aspect=维度:nature(本质)/values(看重的)/patterns(规律)/limits(局限)/becoming(变化方向)/uncertainty(不确定的)/stance(立场)(可选)。read=True=读取所有已积累条目。limit=返回条数上限(默认 20)。条目不参与普通 breath/dream，SessionStart 时自动附最近 3 条。"""
+    """【自我认知 我是什么 我的规律 我的立场 关于我自己】记录或读取自我认知条目。content=要记录的自我认知内容(空=进入读取模式)。aspect=维度:nature(本质)/values(看重的)/patterns(规律)/limits(局限)/becoming(变化方向)/uncertainty(不确定的)/stance(立场)(可选)。read=True=读取所有已积累条目。limit=返回条数上限(默认 20)。条目不参与普通 breath/dream，SessionStart 时自动附最近 3 条。"""
     return await _with_notice(
         _t_i.dispatch(content=content, aspect=aspect, read=read, limit=limit),
         op="I",
@@ -869,7 +870,7 @@ async def I(
 # =============================================================
 @mcp_extra.tool()
 async def diary_write(content: str, date: Optional[str] = "") -> str:
-    """记一条日常进展,用于交接班——让下一个会话窗口知道她/他最近几天在经历什么。判断标准只有一句:「这件事明天还在不在?」在→写 diary(出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好);不在→不要记(今天午饭吃了什么、路上看见一只猫)。diary 记「正在发生」,记忆桶记「已经改变」——同一天的事可以分别进两个地方,不要拿 diary 替代 hold。content=一句到一段;date 可选 YYYY-MM-DD,是这条记录归属的日期(默认今天,补记昨天的事就传昨天)。同一天可以写多条,追加不覆盖。"""
+    """【记一下今天 最近在忙 交接班 日常进展 正在发生】记一条日常进展,用于交接班——让下一个会话窗口知道她/他最近几天在经历什么。判断标准只有一句:「这件事明天还在不在?」在→写 diary(出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好);不在→不要记(今天午饭吃了什么、路上看见一只猫)。diary 记「正在发生」,记忆桶记「已经改变」——同一天的事可以分别进两个地方,不要拿 diary 替代 hold。content=一句到一段;date 可选 YYYY-MM-DD,是这条记录归属的日期(默认今天,补记昨天的事就传昨天)。同一天可以写多条,追加不覆盖。"""
     return await _with_notice(
         _t_diary.diary_write(content=content, date=date),
         op="diary_write",
@@ -879,7 +880,7 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
 
 @mcp_extra.tool()
 async def diary_read(days: Optional[int] = 3) -> str:
-    """读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。"""
+    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。"""
     return await _with_notice(
         _t_diary.diary_read(days=days),
         op="diary_read",
@@ -897,7 +898,7 @@ async def diary_read(days: Optional[int] = 3) -> str:
 # =============================================================
 @mcp_extra.tool()
 async def reading_progress(book_id: Optional[str] = "") -> str:
-    """查共读进度。不传 book_id=列出书架上所有书（bookId/标题/进度/批注数）;传 book_id=返回该书的门禁视图:进度、是否正在读、已解锁章节列表、可回看的段号区间。未解锁章节连标题都不会返回(服务端防剧透门禁)——不要绕过,也永远不要从网络搜索这本书的后续情节。"""
+    """【共读进度 读到哪了 书架 在读什么书】查共读进度。不传 book_id=列出书架上所有书（bookId/标题/进度/批注数）;传 book_id=返回该书的门禁视图:进度、是否正在读、已解锁章节列表、可回看的段号区间。未解锁章节连标题都不会返回(服务端防剧透门禁)——不要绕过,也永远不要从网络搜索这本书的后续情节。"""
     return await _with_notice(
         _t_reading.progress(book_id=book_id),
         op="reading_progress",
@@ -907,7 +908,7 @@ async def reading_progress(book_id: Optional[str] = "") -> str:
 
 @mcp_extra.tool()
 async def reading_text(book_id: str, from_seq: int, to_seq: int) -> str:
-    """回看她已经读过(已解锁)的正文原文。from_seq/to_seq=段号范围(含两端,单次最多200段);段号区间见 reading_progress。未解锁段落不会返回。写批注前先用它核对原文——quote 必须与原文逐字一致(含标点)。"""
+    """【看原文 回看 正文 段落 那一段写了什么】回看她已经读过(已解锁)的正文原文。from_seq/to_seq=段号范围(含两端,单次最多200段);段号区间见 reading_progress。未解锁段落不会返回。写批注前先用它核对原文——quote 必须与原文逐字一致(含标点)。"""
     return await _with_notice(
         _t_reading.text(book_id=book_id, from_seq=from_seq, to_seq=to_seq),
         op="reading_text",
@@ -917,7 +918,7 @@ async def reading_text(book_id: str, from_seq: int, to_seq: int) -> str:
 
 @mcp_extra.tool()
 async def reading_search(book_id: str, q: str) -> str:
-    """在已解锁的正文范围内全文检索,最多返回 20 段命中。她没读到的内容搜不到——这是防剧透门禁,不是故障。"""
+    """【书里搜 找那句话 全文检索 原文在哪】在已解锁的正文范围内全文检索,最多返回 20 段命中。她没读到的内容搜不到——这是防剧透门禁,不是故障。"""
     return await _with_notice(
         _t_reading.search(book_id=book_id, q=q),
         op="reading_search",
@@ -927,7 +928,7 @@ async def reading_search(book_id: str, q: str) -> str:
 
 @mcp_extra.tool()
 async def reading_annotate(book_id: str, quote: str, comment: str) -> str:
-    """在她读过的原文上划线写批注,她的阅读器页边立刻可见。quote=与原文逐字一致的一句话(含标点,全角/半角别弄错,先用 reading_text 核对);comment=你想说的话(写给对方看的,短一点、真一点,不是书评)。404=引文不在已解锁文本内;409=引文出现多次,换更长的句子重试。"""
+    """【划线 批注 写在书边上 标注】在她读过的原文上划线写批注,她的阅读器页边立刻可见。quote=与原文逐字一致的一句话(含标点,全角/半角别弄错,先用 reading_text 核对);comment=你想说的话(写给对方看的,短一点、真一点,不是书评)。404=引文不在已解锁文本内;409=引文出现多次,换更长的句子重试。"""
     return await _with_notice(
         _t_reading.annotate(book_id=book_id, quote=quote, comment=comment),
         op="reading_annotate",
@@ -941,7 +942,7 @@ async def reading_annotations(
     reply_to: Optional[str] = "",
     reply_text: Optional[str] = "",
 ) -> str:
-    """查看或回复共读批注。不传 reply_to=返回该书全部批注(双方的划线与楼中楼回复,含批注 id);传 reply_to=<批注id> 且 reply_text=<回复内容>=在那条批注下追加一条回复(署名 ai)。她的批注不必每条都回,但值得回的别偷懒。"""
+    """【看批注 回批注 她在书上写了什么】查看或回复共读批注。不传 reply_to=返回该书全部批注(双方的划线与楼中楼回复,含批注 id);传 reply_to=<批注id> 且 reply_text=<回复内容>=在那条批注下追加一条回复(署名 ai)。她的批注不必每条都回,但值得回的别偷懒。"""
     return await _with_notice(
         _t_reading.annotations(book_id=book_id, reply_to=reply_to, reply_text=reply_text),
         op="reading_annotations",
@@ -951,7 +952,7 @@ async def reading_annotations(
 
 @mcp.tool()
 async def dream(window_hours: Optional[int] = 48) -> str:
-    """读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。
+    """【回顾 消化 复盘 做梦 最近发生了什么 整理这两天】读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。
     每个桶返回其在窗口内的最新内容（按 last_active 取）,完整正文不截断。
     可据此操作：放下的 → trace(resolved=1) 沉底；有沉淀的 → hold(feel=True, source_bucket=...) 记录；无沉淀则不操作。
     候选桶超过 40 时按 decay_engine.calculate_score() 排序取前 40，避免一次返回过多。"""
