@@ -4,6 +4,8 @@ github_sync.py — GitHub 仓库同步（用于 bucket 数据云端备份）
 策略：
 - 只同步 buckets_dir 下的 .md 文件（纯文本，体积小，可读性好）
 - embeddings.db 不上传（二进制，可由 /api/embedding/migrate 重算）
+- diary.db 重算不出来，所以每次同步现导一份纯文本快照 diary.md 一起传
+  （只进 GitHub、不写盘，见 _attach_diary_export）
 - 使用 GitHub Git Trees API 批量提交（一次同步 = 一个 commit）
 - 支持手动触发 + 可选的定时自动同步
 
@@ -30,6 +32,7 @@ _TIMEOUT = 60.0
 _MAX_FILE_BYTES = 5 * 1024 * 1024  # GitHub single blob 上限 ~100MB，这里保守限 5MB
 _TREE_CHUNK = 200                  # 每个 /git/trees 请求最多内联多少文件，避免单请求过大
 _MANIFEST_FILENAME = "_ombre_backup_manifest.json"
+_DIARY_EXPORT_FILENAME = "diary.md"   # diary.db 的纯文本快照，每次同步现导，不落盘
 
 
 class GitHubSync:
@@ -67,6 +70,7 @@ class GitHubSync:
         """同步 buckets_dir 下所有 .md 到 GitHub。返回结果 dict。"""
         try:
             files = self._collect_files(buckets_dir)
+            self._attach_diary_export(files, buckets_dir)
             if not files:
                 self.last_status = "ok"
                 self.last_error = ""
@@ -242,16 +246,43 @@ class GitHubSync:
                 if not fn.endswith(".md"):
                     continue
                 full = os.path.join(root, fn)
+                rel = os.path.relpath(full, buckets_dir).replace("\\", "/")
+                # 根目录的 diary.md 是导出产物不是记忆桶。import_from_github 会把它
+                # 拉回盘上，若在这里当普通文件收走，下次同步就会用盘上那份旧快照
+                # 盖掉 _attach_diary_export 现导的新快照。
+                if rel == _DIARY_EXPORT_FILENAME:
+                    continue
                 try:
                     size = os.path.getsize(full)
                     if size > _MAX_FILE_BYTES:
                         logger.warning(f"[github_sync] skip {fn}: too large ({size} bytes)")
                         continue
                     with open(full, "rb") as f:
-                        result[os.path.relpath(full, buckets_dir).replace("\\", "/")] = f.read()
+                        result[rel] = f.read()
                 except OSError as e:
                     logger.warning(f"[github_sync] skip {fn}: {e}")
         return result
+
+    def _attach_diary_export(self, files: dict[str, bytes], buckets_dir: str) -> None:
+        """把 diary.db 导成 markdown 挂进本次同步的文件集。
+
+        diary.db 是二进制 SQLite，落不进 _collect_files 的 .md 范围，此前全世界
+        只有持久盘上这一份——盘没了就没了。这里每次同步现导一份纯文本快照，
+        不写盘、只进 GitHub，所以既不占持久盘也不会被自己收走。
+
+        导出失败只记日志不抛：备份 diary 是附加目标，不能拖累桶的同步。
+        """
+        try:
+            # 延迟导入：github_sync 是 server.py 启动早期就 import 的模块，
+            # 不要在模块级把 tools 包拽进来。
+            from tools.diary.core import db_path_for, export_markdown  # type: ignore
+
+            text = export_markdown(db_path_for(buckets_dir))
+        except Exception as e:
+            logger.warning(f"[github_sync] diary export skipped: {e}")
+            return
+        if text:
+            files[_DIARY_EXPORT_FILENAME] = text.encode("utf-8")
 
     def _build_backup_manifest(self, files: dict[str, bytes]) -> dict[str, Any]:
         """Build a JSON-safe manifest for the markdown files in one sync."""
