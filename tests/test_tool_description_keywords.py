@@ -112,13 +112,19 @@ def test_time_window_tools_declare_their_boundaries():
     assert "breath" in docs["dream"]
 
 
-def test_diary_read_forbids_answering_from_stale_context():
-    """最严重的一类：被问近况时不调工具，拿上下文直接总结。"""
+def test_diary_read_defers_to_the_session_start_hook():
+    """连贯性优先于「多调工具」。
+
+    2026-07-29 第一版写的是「被问到近况先调这个」——逼模型多调一次工具。
+    用户否掉了这个方向：要的是开窗即在场，而不是每次现查。所以 diary 最近
+    3 天改由 SessionStart 钩子带进来，本工具退成「钩子没覆盖到时才用」。
+    这条钉住的就是这个方向别再被掉回去。"""
     doc = _docstrings()["diary_read"]
 
     assert "唯一的读取路径" in doc
-    assert "不要拿上下文里已有的内容直接总结" in doc
-    assert "breath" in doc and "dream" in doc
+    assert "SessionStart" in doc
+    assert "就别重复调本工具" in doc
+    assert "先调这个" not in doc, "又掉回「逼模型多调工具」的写法了"
 
 
 def test_hold_and_diary_write_point_at_each_other():

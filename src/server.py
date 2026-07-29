@@ -554,6 +554,14 @@ _tools_runtime.init(
     mark_op=_mark_op,
 )
 
+# 工具调用频次统计落在持久盘上（_mark_op 每次调用时写）。
+# 这里注入 buckets_dir，免得它自己再去猜一遍环境变量。
+try:
+    import tool_stats  # type: ignore
+    tool_stats.configure(config.get("buckets_dir", ""))
+except Exception as _e:  # pragma: no cover - 统计不该挡住启动
+    logger.warning(f"tool_stats \u914d\u7f6e\u5931\u8d25\uff0c\u5c06\u56de\u9000\u73af\u5883\u53d8\u91cf: {_e}")
+
 
 # =============================================================
 # MCP tools — thin registration wrappers
@@ -880,7 +888,7 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
 
 @mcp_extra.tool()
 async def diary_read(days: Optional[int] = 3) -> str:
-    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容,刚调过它们也不算读过 diary。被问到近况时不要拿上下文里已有的内容直接总结——先调这个,否则答的是旧上下文而不是最近几天。"""
+    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容。开窗时 SessionStart 钩子已经带了最近 3 天的「=== 最近几天 ===」段,那段在手里就别重复调本工具;只有在需要更早(最多 7 天)、或上下文里根本没有那一段时才调。"""
     return await _with_notice(
         _t_diary.diary_read(days=days),
         op="diary_read",

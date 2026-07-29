@@ -27,6 +27,7 @@ diary 记「正在发生」，桶记「已经改变」。同一天的事可以�
 - 不做标签、不做分类：一条 diary 就是一句到一段自然语言
 
 对外暴露：diary_write(content, date) → str / diary_read(days) → str
+         read_rows(days) → list（不排版的读取层，SessionStart 钩子共用）
          export_markdown(db_path) → str（备份导出，非工具、不注册给 MCP）
          db_path_for(buckets_dir) → str（给备份方定位 diary.db）
 ========================================
@@ -220,22 +221,31 @@ def export_markdown(db_path: str) -> str:
     return "\n".join(lines)
 
 
+def read_rows(days: Optional[int] = DEFAULT_DAYS) -> list[tuple[str, str]]:
+    """取最近 n 天的 (date, content)，按 date 正序、同日按写入顺序。
+
+    抽出来是因为 SessionStart 钩子也要读同一批数据，但它要自己排版、
+    也不该把钩子的读取记成一次工具调用。两边共用这一条查询，不写两套。"""
+    n = _clamp_days(days)
+    since = (datetime.now() - timedelta(days=n - 1)).strftime(_DATE_FMT)
+    conn = _connect()
+    try:
+        return conn.execute(
+            "SELECT date, content FROM diary WHERE date >= ? ORDER BY date ASC, id ASC",
+            (since,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 async def diary_read(days: Optional[int] = DEFAULT_DAYS) -> str:
     if rt.mark_op:
         rt.mark_op("diary_read")
 
     n = _clamp_days(days)
-    since = (datetime.now() - timedelta(days=n - 1)).strftime(_DATE_FMT)
 
     try:
-        conn = _connect()
-        try:
-            rows = conn.execute(
-                "SELECT date, content FROM diary WHERE date >= ? ORDER BY date ASC, id ASC",
-                (since,),
-            ).fetchall()
-        finally:
-            conn.close()
+        rows = read_rows(n)
     except Exception as e:
         return f"diary 读取失败: {e}"
 
