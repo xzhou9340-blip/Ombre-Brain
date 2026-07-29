@@ -103,13 +103,23 @@ _LAST_OP_TS = _SERVER_START_TS
 
 
 def _mark_op(name: str = "") -> None:
-    """记录一次工具/接口活跃时间，供 /api/heartbeat 上报。
+    """记录一次工具/接口活跃时间 + 按工具名累加次数。
 
     server.py 启动时把本函数注入 tools._runtime.mark_op，工具调用即更新；
     /api/heartbeat（web/system.py）读 _LAST_OP_TS。两边同一来源，不会不一致。
+
+    name 此前被直接丢掉（只要时间戳）。现在顺手落进 tool_stats——每个调用点
+    早就把名字传进来了，不记下来就等于「哪些工具不常用」永远只能靠猜，
+    而砍工具是不可逆的。统计失败不影响本函数的主职责。
     """
     global _LAST_OP_TS
     _LAST_OP_TS = time.time()
+    if name:
+        try:
+            import tool_stats  # 延迟导入：本模块在启动早期被 import
+            tool_stats.record(name)
+        except Exception:
+            pass  # tool_stats.record 自己已经吞了异常，这里只防 import 失败
 
 
 # --- server.py 级 helper 的注入位（保持定义在 server.py，这里只持引用）---

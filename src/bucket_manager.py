@@ -1220,6 +1220,11 @@ class BucketManager:
             dest = safe_path(archive_subdir, os.path.basename(file_path))
 
             # Update type marker then move file / 更新类型标记后移动文件
+            # 先记住原来的 type：type 会被覆写成 "archived"，不留一手就再也
+            # 还原不回去了（unarchive 只能一律当 dynamic 处理）。
+            # 重复归档时不覆盖已记录的值，免得把 "archived" 记成原始类型。
+            if post.get("type") != "archived":
+                post["archived_from_type"] = post.get("type") or "dynamic"
             post["type"] = "archived"
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(frontmatter.dumps(post))
@@ -1235,6 +1240,58 @@ class BucketManager:
 
         self._invalidate_bm25()
         logger.info(f"Archived bucket / 归档记忆桶: {bucket_id} → archive/{primary_domain}/")
+        return True
+
+    async def unarchive(self, bucket_id: str) -> bool:
+        """把归档桶搬回活跃区 —— archive() 的反向操作。
+
+        归档一直是单向的：type 被覆写成 "archived"、文件搬进 archive/，
+        然后没有任何回头路。可归档并不只是衰减引擎在做，人也会手工归档
+        「滞后的、重复的」内容 —— 手工操作就一定会有手误，没有反悔的
+        入口等于每次点归档都是一次不可逆的赌。
+
+        还原目标类型取 archived_from_type；历史归档的桶没有这个字段
+        （它是随本方法一起加的），一律按 dynamic 还原。
+        """
+        file_path = self._find_bucket_file(bucket_id)
+        if not file_path:
+            return False
+
+        archive_root = os.path.abspath(self.archive_dir)
+        if not os.path.abspath(file_path).startswith(archive_root + os.sep):
+            # 不在归档区的桶没什么可还原的，当成 no-op 报失败，避免调用方
+            # 以为自己把一个活跃桶「还原」了。
+            return False
+
+        try:
+            post = frontmatter.load(file_path)
+            restored_type = str(post.get("archived_from_type") or "dynamic")
+            domain: list[str] = post.get("domain") or [_DEFAULT_DOMAIN_NAME]  # type: ignore[assignment]
+            primary_domain = self._primary_domain(domain)
+
+            dest_root = {
+                "permanent": self.permanent_dir,
+                "feel": self.feel_dir,
+                "plan": self.plan_dir,
+                "letter": self.letter_dir,
+            }.get(restored_type, self.dynamic_dir)
+            dest_subdir = os.path.join(dest_root, primary_domain)
+            os.makedirs(dest_subdir, exist_ok=True)
+            dest = safe_path(dest_subdir, os.path.basename(file_path))
+
+            post["type"] = restored_type
+            if "archived_from_type" in post.keys():
+                del post["archived_from_type"]
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter.dumps(post))
+
+            shutil.move(file_path, str(dest))
+        except Exception as e:
+            logger.error(f"Failed to unarchive bucket / 还原归档桶失败: {bucket_id}: {e}")
+            return False
+
+        self._invalidate_bm25()
+        logger.info(f"Unarchived bucket / 还原归档桶: {bucket_id} → {restored_type}/{primary_domain}/")
         return True
 
     # ---------------------------------------------------------

@@ -288,10 +288,21 @@ async def build_system_diagnostics() -> dict[str, Any]:
         status = item.get("status")
         if status in summary:
             summary[status] += 1
+    # 工具调用频次：决定「收拢/下线哪个工具」时唯一的事实来源。
+    # 放在诊断里而不是 /api/heartbeat——heartbeat 是前端高频轮询的，
+    # 不该为了一份统计每几秒读一次库。
+    try:
+        import tool_stats  # type: ignore
+
+        tool_calls = tool_stats.snapshot()
+    except Exception:
+        tool_calls = []
+
     return {
         "ok": summary["error"] == 0,
         "summary": summary,
         "checks": checks,
+        "tool_calls": tool_calls,
     }
 
 

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ombre Brain · 记忆库整理</title>
+<style>
+  :root {
+    --bg: #faf7f5;
+    --panel: #ffffff;
+    --line: #e7e0da;
+    --ink: #2e2a27;
+    --muted: #857b73;
+    --accent: #a8705a;
+    --danger: #b04a3d;
+    --ok: #4c7a5a;
+    --chip: #f2ece7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171514;
+      --panel: #201d1b;
+      --line: #322d29;
+      --ink: #ece6e1;
+      --muted: #9a8f86;
+      --accent: #c98e75;
+      --danger: #d2705f;
+      --ok: #79a98a;
+      --chip: #2a2522;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    background: var(--panel); display: flex; gap: 14px; align-items: center;
+    flex-wrap: wrap; position: sticky; top: 0; z-index: 10;
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  .grow { flex: 1; }
+  main { padding: 18px 20px 80px; max-width: 1400px; margin: 0 auto; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-size: 13px; margin: 0 0 10px; color: var(--muted);
+    font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  input, select, button, textarea {
+    font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { cursor: pointer; background: var(--chip); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .filters .wide { grid-column: span 2; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 20px; font-weight: 600; }
+  .stat span { font-size: 11px; color: var(--muted); }
+  .stat.warn b { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  tbody tr:hover { background: var(--chip); }
+  .tablewrap { overflow-x: auto; }
+  .name { font-weight: 600; }
+  .preview { color: var(--muted); font-size: 12px; max-width: 520px; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+  .chip {
+    background: var(--chip); border: 1px solid var(--line); border-radius: 20px;
+    padding: 1px 8px; font-size: 11px; color: var(--muted);
+  }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+  .chip.arch { border-color: var(--danger); color: var(--danger); }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel);
+    border-top: 1px solid var(--line); padding: 10px 20px; display: none;
+    gap: 8px; align-items: center; flex-wrap: wrap; z-index: 20;
+  }
+  .bar.show { display: flex; }
+  .msg { padding: 9px 12px; border-radius: 6px; margin-bottom: 12px; display: none; }
+  .msg.show { display: block; }
+  .msg.err { background: rgba(176,74,61,.12); color: var(--danger); }
+  .msg.ok { background: rgba(76,122,90,.12); color: var(--ok); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>记忆库整理</h1>
+  <span class="grow"></span>
+  <label style="margin:0">
+    Admin Token
+    <input id="token" type="password" placeholder="留空则用 Dashboard 登录态" style="width:220px">
+  </label>
+  <button id="save-token">记住</button>
+</header>
+
+<main>
+  <div id="msg" class="msg"></div>
+
+  <section class="panel">
+    <h2>概览</h2>
+    <div id="stats" class="stats"><span class="stat"><span>加载中…</span></span></div>
+    <div class="hint" id="stats-hint"></div>
+  </section>
+
+  <section class="panel">
+    <h2>筛选</h2>
+    <div class="filters">
+      <div class="wide">
+        <label for="f-q">关键词（标题或正文，子串匹配）</label>
+        <input id="f-q" placeholder="留空 = 不按关键词筛">
+      </div>
+      <div>
+        <label for="f-type">类型</label>
+        <select id="f-type">
+          <option value="">全部</option>
+          <option value="dynamic">dynamic</option>
+          <option value="permanent">permanent</option>
+          <option value="archived">archived</option>
+          <option value="feel">feel</option>
+          <option value="plan">plan</option>
+          <option value="letter">letter</option>
+        </select>
+      </div>
+      <div>
+        <label for="f-resolved">resolved</label>
+        <select id="f-resolved">
+          <option value="">不筛</option>
+          <option value="0">未 resolved</option>
+          <option value="1">已 resolved</option>
+        </select>
+      </div>
+      <div>
+        <label for="f-archived">归档</label>
+        <select id="f-archived">
+          <option value="">不筛</option>
+          <option value="0">未归档</option>
+          <option value="1">已归档</option>
+        </select>
+      </div>
+      <div>
+        <label for="f-imp-min">importance ≥</label>
+        <input id="f-imp-min" type="number" min="1" max="10" placeholder="">
+      </div>
+      <div>
+        <label for="f-imp-max">importance ≤</label>
+        <input id="f-imp-max" type="number" min="1" max="10" placeholder="">
+      </div>
+      <div>
+        <label for="f-before">创建于此日期之前</label>
+        <input id="f-before" type="date">
+      </div>
+      <div>
+        <label for="f-after">创建于此日期之后</label>
+        <input id="f-after" type="date">
+      </div>
+      <div>
+        <label for="f-tags">标签（逗号分隔，AND）</label>
+        <input id="f-tags" placeholder="work,未闭环">
+      </div>
+      <div>
+        <label for="f-sort">排序</label>
+        <select id="f-sort">
+          <option value="score">score</option>
+          <option value="created">created</option>
+          <option value="last_active">last_active</option>
+          <option value="importance">importance</option>
+          <option value="name">name</option>
+        </select>
+      </div>
+      <div>
+        <label for="f-order">方向</label>
+        <select id="f-order"><option value="desc">降序</option><option value="asc">升序</option></select>
+      </div>
+      <div>
+        <label for="f-size">每页</label>
+        <select id="f-size">
+          <option>50</option><option>100</option><option>200</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="search">筛选</button>
+      <button id="reset">清空条件</button>
+      <button id="preset">验收用例：2026-06 以前 · importance ≤ 3 · 未 resolved</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <h2 style="margin:0">结果 <span id="count" class="num"></span></h2>
+      <span class="grow"></span>
+      <button id="sel-page">全选本页</button>
+      <button id="sel-none">取消选择</button>
+      <button id="prev">← 上一页</button>
+      <span id="pageinfo" class="num"></span>
+      <button id="next">下一页 →</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28px"></th>
+            <th>记忆</th>
+            <th class="num">imp</th>
+            <th class="num">score</th>
+            <th class="num">创建</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="6" style="color:var(--muted)">还没有筛选。</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="bar" id="bar">
+  <b><span id="selcount">0</span> 条已选</b>
+  <span class="grow"></span>
+  <input id="b-tags" placeholder="标签，逗号分隔" style="width:180px">
+  <button data-act="add_tags">加标签</button>
+  <button data-act="remove_tags">去标签</button>
+  <button data-act="set_resolved" data-val="1">标记已 resolved</button>
+  <button data-act="set_resolved" data-val="0">取消 resolved</button>
+  <button data-act="set_dont_surface" data-val="1">不再浮现</button>
+  <button data-act="archive">归档</button>
+  <button data-act="unarchive">还原归档</button>
+  <button class="danger" data-act="delete">彻底删除</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { page: 1, pages: 1, items: [], selected: {} };
+
+  // ---- token：只放 localStorage，不进 URL（URL 会进浏览器历史和日志） ----
+  var TOKEN_KEY = "ombre_admin_token";
+  $("token").value = localStorage.getItem(TOKEN_KEY) || "";
+  $("save-token").onclick = function () {
+    localStorage.setItem(TOKEN_KEY, $("token").value.trim());
+    say("token 已记住（只存在这台浏览器里）", "ok");
+    loadStats();
+  };
+
+  function say(text, kind) {
+    var el = $("msg");
+    el.textContent = text;
+    el.className = "msg show " + (kind || "");
+    if (kind === "ok") { setTimeout(function () { el.className = "msg"; }, 4000); }
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    var token = ($("token").value || "").trim();
+    if (token) { headers["X-Ombre-Admin-Token"] = token; }
+    if (opts.body) { headers["Content-Type"] = "application/json"; }
+    return fetch(path, {
+      method: opts.method || "GET",
+      headers: headers,
+      credentials: "same-origin",
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) {
+          var m = data.error || ("HTTP " + r.status);
+          if (data.hint) { m += " — " + data.hint; }
+          if (data.reason) { m += " — " + data.reason; }
+          throw new Error(m);
+        }
+        return data;
+      });
+    });
+  }
+
+  // ---- 概览 ----
+  function loadStats() {
+    api("/admin/stats").then(function (s) {
+      var cells = [
+        ["总计", s.total], ["未 resolved", s.unresolved], ["已归档", s.archived],
+        ["pinned", s.pinned], ["不再浮现", s.dont_surface]
+      ].map(function (kv) {
+        return '<span class="stat"><b class="num">' + kv[1] + "</b><span>" + kv[0] + "</span></span>";
+      });
+      cells.push('<span class="stat warn"><b class="num">' + s.at_risk +
+        "</b><span>下轮衰减将归档</span></span>");
+      $("stats").innerHTML = cells.join("");
+      var tags = (s.top_tags || []).slice(0, 12).map(function (t) {
+        return t.tag + "·" + t.count;
+      }).join("　");
+      $("stats-hint").innerHTML = "归档阈值 <code>" + s.decay_threshold +
+        "</code>　常见标签：" + (tags || "（无）");
+    }).catch(function (e) {
+      $("stats").innerHTML = '<span class="stat"><span>读不到概览</span></span>';
+      say("读取概览失败：" + e.message, "err");
+    });
+  }
+
+  // ---- 筛选 ----
+  function buildQuery() {
+    var p = new URLSearchParams();
+    var add = function (k, v) { if (v !== "" && v !== null && v !== undefined) { p.set(k, v); } };
+    add("q", $("f-q").value.trim());
+    add("type", $("f-type").value);
+    add("resolved", $("f-resolved").value);
+    add("archived", $("f-archived").value);
+    add("importance_min", $("f-imp-min").value);
+    add("importance_max", $("f-imp-max").value);
+    add("created_before", $("f-before").value);
+    add("created_after", $("f-after").value);
+    add("tags", $("f-tags").value.trim());
+    add("sort", $("f-sort").value);
+    add("order", $("f-order").value);
+    add("page_size", $("f-size").value);
+    add("page", state.page);
+    return p.toString();
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function search() {
+    api("/admin/buckets?" + buildQuery()).then(function (data) {
+      state.items = data.items || [];
+      state.pages = data.pages || 1;
+      state.page = data.page || 1;
+      $("count").textContent = "共 " + data.total + " 条";
+      $("pageinfo").textContent = state.page + " / " + state.pages;
+      render();
+    }).catch(function (e) { say("筛选失败：" + e.message, "err"); });
+  }
+
+  function render() {
+    var tb = $("rows");
+    if (!state.items.length) {
+      tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">没有命中的记忆。</td></tr>';
+      updateBar();
+      return;
+    }
+    tb.innerHTML = state.items.map(function (b) {
+      var flags = [];
+      if (b.archived) { flags.push('<span class="chip arch">已归档</span>'); }
+      if (b.resolved) { flags.push('<span class="chip">resolved</span>'); }
+      if (b.pinned) { flags.push('<span class="chip on">pinned</span>'); }
+      if (b.dont_surface) { flags.push('<span class="chip">不浮现</span>'); }
+      var tags = (b.tags || []).map(function (t) {
+        return '<span class="chip">' + esc(t) + "</span>";
+      }).join("");
+      return '<tr><td><input type="checkbox" data-id="' + esc(b.id) + '"' +
+        (state.selected[b.id] ? " checked" : "") + "></td>" +
+        '<td><div class="name">' + esc(b.name) + "</div>" +
+        '<div class="preview">' + esc(b.content_preview) + "</div>" +
+        '<div class="chips">' + tags + "</div></td>" +
+        '<td class="num">' + esc(b.importance) + "</td>" +
+        '<td class="num">' + Number(b.score || 0).toFixed(2) + "</td>" +
+        '<td class="num">' + esc(String(b.created || "").slice(0, 10)) + "</td>" +
+        '<td><div class="chips">' + flags.join("") + "</div></td></tr>";
+    }).join("");
+    Array.prototype.forEach.call(tb.querySelectorAll("input[type=checkbox]"), function (cb) {
+      cb.onchange = function () {
+        if (cb.checked) { state.selected[cb.dataset.id] = true; }
+        else { delete state.selected[cb.dataset.id]; }
+        updateBar();
+      };
+    });
+    updateBar();
+  }
+
+  function selectedIds() { return Object.keys(state.selected); }
+
+  function updateBar() {
+    var n = selectedIds().length;
+    $("selcount").textContent = n;
+    $("bar").className = n ? "bar show" : "bar";
+  }
+
+  // ---- 批量 ----
+  Array.prototype.forEach.call(document.querySelectorAll("#bar button[data-act]"), function (btn) {
+    btn.onclick = function () {
+      var act = btn.dataset.act;
+      var ids = selectedIds();
+      if (!ids.length) { return; }
+      var body = { action: act, ids: ids };
+
+      if (act === "add_tags" || act === "remove_tags") {
+        var tags = $("b-tags").value.split(",").map(function (s) { return s.trim(); })
+          .filter(Boolean);
+        if (!tags.length) { say("先在输入框里写标签", "err"); return; }
+        body.tags = tags;
+      }
+      if (act === "set_resolved") { body.resolved = btn.dataset.val === "1"; }
+      if (act === "set_dont_surface") { body.dont_surface = btn.dataset.val === "1"; }
+
+      if (act === "delete") {
+        // 二次确认：要求手打条数，防止顺手回车。服务端还会再要一次 confirm。
+        var typed = window.prompt(
+          "彻底删除 " + ids.length + " 条，不可恢复。\n" +
+          "服务端会先把它们整体导出到盘上再删。\n\n" +
+          "确认请输入条数：" + ids.length);
+        if (String(typed || "").trim() !== String(ids.length)) {
+          say("已取消删除", "ok");
+          return;
+        }
+        body.confirm = true;
+      } else if (act === "archive" || act === "unarchive") {
+        if (!window.confirm(
+          (act === "archive" ? "归档" : "还原") + " " + ids.length + " 条？")) { return; }
+      }
+
+      btn.disabled = true;
+      api("/admin/buckets/batch", { method: "POST", body: body }).then(function (r) {
+        var c = r.counts || {};
+        var text = "完成 " + c.done + " 条";
+        if (c.missing) { text += "，找不到 " + c.missing + " 条"; }
+        if (c.errors) { text += "，失败 " + c.errors + " 条"; }
+        if (r.export_path) { text += "。删除前已导出到 " + r.export_path; }
+        say(text, c.errors ? "err" : "ok");
+        state.selected = {};
+        search();
+        loadStats();
+      }).catch(function (e) {
+        say("批量操作失败：" + e.message, "err");
+      }).then(function () { btn.disabled = false; });
+    };
+  });
+
+  // ---- 交互 ----
+  $("search").onclick = function () { state.page = 1; search(); };
+  $("reset").onclick = function () {
+    ["f-q", "f-imp-min", "f-imp-max", "f-before", "f-after", "f-tags"].forEach(function (id) {
+      $(id).value = "";
+    });
+    ["f-type", "f-resolved", "f-archived"].forEach(function (id) { $(id).value = ""; });
+    state.page = 1;
+    search();
+  };
+  $("preset").onclick = function () {
+    $("f-before").value = "2026-06-01";
+    $("f-imp-max").value = "3";
+    $("f-resolved").value = "0";
+    $("f-archived").value = "0";
+    state.page = 1;
+    search();
+  };
+  $("prev").onclick = function () {
+    if (state.page > 1) { state.page -= 1; search(); }
+  };
+  $("next").onclick = function () {
+    if (state.page < state.pages) { state.page += 1; search(); }
+  };
+  $("sel-page").onclick = function () {
+    state.items.forEach(function (b) { state.selected[b.id] = true; });
+    render();
+  };
+  $("sel-none").onclick = function () { state.selected = {}; render(); };
+  $("f-q").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { state.page = 1; search(); }
+  });
+
+  loadStats();
+  search();
+})();
+</script>
+</body>
+</html>

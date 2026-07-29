@@ -1,3 +1,18 @@
+# ============================================================
+# 这份蓝图对齐的是**线上正在跑的那个服务**（2026-07-29 核对）。
+#
+# 之前它和线上对不上：挂载点写的是 /app/buckets、sizeGB 写的是 5，而线上
+# 实际把盘挂在 /opt/render/project/src/buckets、大小 1G。照旧版重建服务会
+# 建出一个「盘挂在 A、数据写在 B」的服务——看起来一切正常，重启后数据没了。
+#
+# 路径相关的三个变量（VAULT_DIR / BUCKETS_DIR / CONFIG_PATH）Dockerfile 里
+# 都烧死成 /app/... ，这里显式覆盖成挂载点。环境变量优先级高于镜像 ENV，
+# 线上就是靠面板上的这几个变量把数据救在盘上的。
+#
+# OMBRE_CONFIG_PATH 不只是配置路径：entrypoint.sh:84 用
+# `CODE_DIR="$(dirname "$CONFIG")/_app"` 决定把代码播种到哪儿，所以它必须
+# 落在持久盘上，否则热更新活不过一次重启。
+# ============================================================
 services:
   # ombre-brain 主服务：Docker 运行时（镜像里同时有 Python + Node，
   # read-along 共读后端由 src/web/reading_bridge.py 以子进程方式拉起，
@@ -27,8 +42,15 @@ services:
         sync: false          # e.g. https://generativelanguage.googleapis.com/v1beta/openai/
       - key: OMBRE_COMPRESS_MODEL
         sync: false          # e.g. gemini-2.5-flash
+      # --- 路径三件套：必须与下面 disk.mountPath 完全一致 ---
       - key: OMBRE_VAULT_DIR
-        value: /app/buckets  # 持久盘挂载点（Dockerfile 同名 ENV，这里显式声明保持一致）
+        value: /opt/render/project/src/buckets   # 覆盖 Dockerfile 的 /app/buckets
+      - key: OMBRE_BUCKETS_DIR
+        value: /opt/render/project/src/buckets   # 旧变量名，与 VAULT_DIR 同值，避免两者打架
+      - key: OMBRE_CONFIG_PATH
+        value: /opt/render/project/src/buckets/config.yaml   # 同时决定代码播种目录 <这里>/_app
+      - key: NIGHT_FALL_DATA_DIR
+        value: /opt/render/project/src/buckets/night_fall    # 覆盖 Dockerfile 的 /app/buckets/night_fall
       - key: BARK_KEY
         sync: false          # bark_push 工具用；Bark App 设备 key，在 Dashboard 填
       - key: SUPABASE_URL
@@ -46,5 +68,6 @@ services:
       #   READING_PUSH_ENABLED / READING_PUSH_WEBHOOK 保持不设（DRY-RUN）
     disk:
       name: ombre-buckets
-      mountPath: /app/buckets
-      sizeGB: 5              # 记忆桶 + peek 截图 + read-along 书库（<盘>/read-along/）共用
+      mountPath: /opt/render/project/src/buckets   # 线上实际挂载点，独立设备
+      sizeGB: 1              # 线上实际 1G（当前用量 3%）。记忆桶 + diary.db + peek 截图 +
+                             # read-along 书库（<盘>/read-along/）+ 代码副本 _app/ 共用

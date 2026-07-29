@@ -27,6 +27,9 @@ diary 记「正在发生」，桶记「已经改变」。同一天的事可以�
 - 不做标签、不做分类：一条 diary 就是一句到一段自然语言
 
 对外暴露：diary_write(content, date) → str / diary_read(days) → str
+         read_rows(days) → list（不排版的读取层，SessionStart 钩子共用）
+         export_markdown(db_path) → str（备份导出，非工具、不注册给 MCP）
+         db_path_for(buckets_dir) → str（给备份方定位 diary.db）
 ========================================
 """
 
@@ -48,6 +51,14 @@ _DATE_FMT = "%Y-%m-%d"
 
 # -------------------- 存储 --------------------
 
+def db_path_for(buckets_dir: str) -> str:
+    """由 buckets_dir 拼出 diary.db 路径。
+
+    对外暴露只为一件事：备份导出方（github_sync）需要定位这个文件，
+    但「diary.db 叫什么、放哪一层」应当只有 diary 自己知道。"""
+    return os.path.join(buckets_dir, _DB_FILENAME)
+
+
 def _db_path() -> str:
     """diary.db 落在 buckets_dir 下（与 dehydration_cache.db 同级）。
 
@@ -60,7 +71,7 @@ def _db_path() -> str:
         base = os.environ.get("OMBRE_VAULT_DIR") or os.environ.get("OMBRE_BUCKETS_DIR") or ""
     if not base:
         raise RuntimeError("找不到 buckets_dir，无法定位 diary.db")
-    return os.path.join(base, _DB_FILENAME)
+    return db_path_for(base)
 
 
 def _connect() -> sqlite3.Connection:
@@ -158,22 +169,83 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
     return f"📔 diary #{row_id} {d}"
 
 
+def export_markdown(db_path: str) -> str:
+    """把 diary.db 全表导成纯文本 markdown，供异地备份用。返回空串表示没什么可导。
+
+    这不是 MCP 工具，不注册、不给模型调用——它是备份管道的一环。所以它读全表，
+    而不受 MAX_DAYS 约束：7 天窗口是「AI 该看多久」的产品边界，备份的边界是
+    「盘没了还能不能恢复」，只导一个窗口等于没备份。
+
+    格式刻意做成人能读、也能反解的样子：`## 日期` 分段，每条一行
+    `- [写入时间] 正文`。正文里的换行折成 `\\n` 转义，保证一条永远一行——
+    恢复时按行切就行，不用写解析器。
+
+    db 不存在 / 表还没建（还没写过 diary）都返回空串，不是错误。"""
+    if not os.path.isfile(db_path):
+        return ""
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='diary'"
+        ).fetchone()
+        if not exists:
+            return ""
+        rows = conn.execute(
+            "SELECT date, created_at, content FROM diary ORDER BY date ASC, id ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return ""
+
+    lines = [
+        "# diary 备份",
+        "",
+        "由 ombre-brain 同步时自动导出。diary.db 只在持久盘上有一份，",
+        "这份纯文本是它丢失后的恢复依据。格式：`- [写入时间] 正文`，一条一行。",
+        "",
+        f"- 导出时间：{datetime.now().isoformat(timespec='seconds')}",
+        f"- 条数：{len(rows)}",
+        "",
+    ]
+    current = ""
+    for d, created_at, text in rows:
+        if d != current:
+            current = d
+            lines.append(f"## {d}")
+        flat = str(text).replace("\\", "\\\\").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+        lines.append(f"- [{created_at}] {flat}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def read_rows(days: Optional[int] = DEFAULT_DAYS) -> list[tuple[str, str]]:
+    """取最近 n 天的 (date, content)，按 date 正序、同日按写入顺序。
+
+    抽出来是因为 SessionStart 钩子也要读同一批数据，但它要自己排版、
+    也不该把钩子的读取记成一次工具调用。两边共用这一条查询，不写两套。"""
+    n = _clamp_days(days)
+    since = (datetime.now() - timedelta(days=n - 1)).strftime(_DATE_FMT)
+    conn = _connect()
+    try:
+        return conn.execute(
+            "SELECT date, content FROM diary WHERE date >= ? ORDER BY date ASC, id ASC",
+            (since,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 async def diary_read(days: Optional[int] = DEFAULT_DAYS) -> str:
     if rt.mark_op:
         rt.mark_op("diary_read")
 
     n = _clamp_days(days)
-    since = (datetime.now() - timedelta(days=n - 1)).strftime(_DATE_FMT)
 
     try:
-        conn = _connect()
-        try:
-            rows = conn.execute(
-                "SELECT date, content FROM diary WHERE date >= ? ORDER BY date ASC, id ASC",
-                (since,),
-            ).fetchall()
-        finally:
-            conn.close()
+        rows = read_rows(n)
     except Exception as e:
         return f"diary 读取失败: {e}"
 

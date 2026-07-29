@@ -30,6 +30,15 @@ except ImportError:  # pragma: no cover
     from ..utils import strip_wikilinks, count_tokens_approx, get_ai_name  # type: ignore
 
 
+# 钩子里交接班两段的配额。钩子的正文是每次开窗都要付的固定成本，
+# 所以这里刻意抠：diary 3 天足够交接，plan 只列最近 8 条（完整列表在 dream 里）。
+_DIARY_HOOK_DAYS = 3
+_DIARY_HOOK_MAX_ROWS = 12
+_DIARY_HOOK_MAX_CHARS = 200
+_PLAN_HOOK_MAX_ROWS = 8
+_PLAN_HOOK_MAX_CHARS = 120
+
+
 def _truthy(value) -> bool:
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -128,10 +137,61 @@ def register(mcp) -> None:
                 parts.append(summary)
                 token_budget -= summary_tokens
 
-            if not parts:
+            # --- 交接班两段：最近几天在经历什么 + 还欠着什么 ---
+            # 这两样此前不在钩子里，开窗时不在场，被问到「最近怎么样」「还欠着什么」
+            # 只能靠模型自己想起来去调 diary_read / 翻 dream —— 实测它往往不调，
+            # 直接拿上下文里的旧内容总结。放进钩子后开窗即在场，零工具调用。
+            handoff_sections: list[str] = []
+
+            try:
+                from tools.diary.core import read_rows as _diary_rows  # type: ignore
+
+                diary_rows = _diary_rows(_DIARY_HOOK_DAYS)[-_DIARY_HOOK_MAX_ROWS:]
+                if diary_rows:
+                    diary_lines = []
+                    current_day = ""
+                    for d, text in diary_rows:
+                        if d != current_day:
+                            current_day = d
+                            diary_lines.append(f"\n{d}")
+                        diary_lines.append(f"- {str(text)[:_DIARY_HOOK_MAX_CHARS]}")
+                    handoff_sections.append(
+                        f"\n\n=== 最近几天 ===（diary，{_DIARY_HOOK_DAYS} 天内）"
+                        + "\n".join(diary_lines)
+                    )
+            except Exception as e:
+                logger.warning(f"breath_hook diary section failed: {e}")
+
+            try:
+                plans_active = [
+                    b for b in all_buckets
+                    if b["metadata"].get("type") == "plan"
+                    and b["metadata"].get("status", "active") == "active"
+                ]
+                plans_active.sort(key=lambda b: b["metadata"].get("created", ""), reverse=True)
+                if plans_active:
+                    plan_lines = [
+                        f"- {(p['metadata'].get('created') or '')[:10]} "
+                        f"{strip_wikilinks(p['content'])[:_PLAN_HOOK_MAX_CHARS]}"
+                        for p in plans_active[:_PLAN_HOOK_MAX_ROWS]
+                    ]
+                    more = len(plans_active) - len(plan_lines)
+                    if more > 0:
+                        plan_lines.append(f"…还有 {more} 条，完整列表在 dream 末尾")
+                    handoff_sections.append(
+                        "\n\n=== 还欠着的 ===（active plan）\n" + "\n".join(plan_lines)
+                    )
+            except Exception as e:
+                logger.warning(f"breath_hook plan section failed: {e}")
+
+            # 一个桶都没有但有 diary / plan 时也要返回——交接材料不该因为
+            # 「没有可浮现的记忆桶」被整段丢掉。
+            if not parts and not handoff_sections:
                 await sh.fire_webhook("breath_hook", {"surfaced": 0})
                 return PlainTextResponse("")
-            body_text = "[Ombre Brain - 记忆浮现]\n" + "\n---\n".join(parts)
+            body_text = "[Ombre Brain - 记忆浮现]"
+            if parts:
+                body_text += "\n" + "\n---\n".join(parts)
 
             # --- Append latest letter from each side (iter 1.4) ---
             # --- 附带双方各最新一封 letter ---
@@ -189,6 +249,10 @@ def register(mcp) -> None:
                         body_text += "\n\n=== I ===\n" + "\n\n".join(self_lines)
             except Exception as e:
                 logger.warning(f"breath_hook I section failed: {e}")
+
+            # 交接班两段放最后：前面几段是「他是谁、在意什么」，这两段是
+            # 「此刻站在哪儿、还欠着什么」，紧贴对话开头更容易被用上。
+            body_text += "".join(handoff_sections)
 
             await sh.fire_webhook("breath_hook", {"surfaced": len(parts), "chars": len(body_text)})
             return PlainTextResponse(body_text)
