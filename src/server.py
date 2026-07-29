@@ -571,7 +571,7 @@ async def breath(
     importance_min: Optional[int] = -1,
     tags: Optional[str] = "",
 ) -> str:
-    """【检索 回忆 想起 记起 查记忆 她说过什么 以前提过 之前聊过 翻记录】检索并返回记忆桶。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
+    """【检索 回忆 想起 记起 查记忆 她说过什么 以前提过 之前聊过 翻记录】检索并返回记忆桶(全库翻找,不限时间窗)。被问到「最近两天有什么变动」走 dream,「最近几天在经历什么」走 diary_read——那两类内容不在本工具的返回里。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
     return await _with_notice(
         _t_breath.dispatch(
             query=query, max_tokens=max_tokens, domain=domain,
@@ -599,7 +599,7 @@ async def hold(
     arousal: Optional[float] = -1,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """【记住 存下来 别忘了 记一笔 记下来 存进记忆】存入一条记忆(一句话级)。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
+    """【记住 存下来 别忘了 记一笔 记下来 存进记忆】存入一条记忆(一句话级)。存的是「已经改变了什么」的事实/结论/关系变化;「出差到周五、这周赶一个活」这类正在进行的日常进展走 diary_write,不要混。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
     return await _with_notice(
         _t_hold.dispatch(
             content=content, tags=tags, importance=importance,
@@ -880,7 +880,7 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
 
 @mcp_extra.tool()
 async def diary_read(days: Optional[int] = 3) -> str:
-    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。"""
+    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容,刚调过它们也不算读过 diary。被问到近况时不要拿上下文里已有的内容直接总结——先调这个,否则答的是旧上下文而不是最近几天。"""
     return await _with_notice(
         _t_diary.diary_read(days=days),
         op="diary_read",
@@ -952,7 +952,7 @@ async def reading_annotations(
 
 @mcp.tool()
 async def dream(window_hours: Optional[int] = 48) -> str:
-    """【回顾 消化 复盘 做梦 最近发生了什么 整理这两天】读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。
+    """【回顾这两天 消化 复盘 做梦 睡前整理 窗口内有什么变动】读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。只覆盖窗口内被改动过的桶:不含 diary(问「最近怎么样/近况」要调 diary_read),不含窗口外的旧记忆(要翻旧事调 breath)。
     每个桶返回其在窗口内的最新内容（按 last_active 取）,完整正文不截断。
     可据此操作：放下的 → trace(resolved=1) 沉底；有沉淀的 → hold(feel=True, source_bucket=...) 记录；无沉淀则不操作。
     候选桶超过 40 时按 decay_engine.calculate_score() 排序取前 40，避免一次返回过多。"""

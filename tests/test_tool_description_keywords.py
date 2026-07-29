@@ -91,6 +91,44 @@ def test_prefix_does_not_replace_the_original_description():
     assert "delete=True" in docs["trace"]
 
 
+# ------------------------------------------------------------
+# 2026-07-29 人工验收发现的选错工具（补钉）
+#
+# 用户实测：问「我最近怎么样」不调任何工具，直接拿上下文里已有的内容总结；
+# 「回忆」调到了 dream；日常进展和一句话事实分不清 diary_write / hold。
+# 光有同义词不够——三个工具的口语词天然重叠，还得在描述里写清彼此的边界，
+# 尤其是「刚调过 X 不等于读过 Y」这句：它治的是「不调工具」而不是「调错工具」。
+# ------------------------------------------------------------
+
+def test_time_window_tools_declare_their_boundaries():
+    """breath(全库) / dream(48h 窗口) / diary_read(最近几天) 必须互相指路。"""
+    docs = _docstrings()
+
+    assert "全库翻找" in docs["breath"]
+    assert "dream" in docs["breath"] and "diary_read" in docs["breath"]
+
+    assert "不含 diary" in docs["dream"]
+    assert "diary_read" in docs["dream"]
+    assert "breath" in docs["dream"]
+
+
+def test_diary_read_forbids_answering_from_stale_context():
+    """最严重的一类：被问近况时不调工具，拿上下文直接总结。"""
+    doc = _docstrings()["diary_read"]
+
+    assert "唯一的读取路径" in doc
+    assert "不要拿上下文里已有的内容直接总结" in doc
+    assert "breath" in doc and "dream" in doc
+
+
+def test_hold_and_diary_write_point_at_each_other():
+    """边界此前只写在 diary_write 一侧，单向的指路只能挡住一个方向。"""
+    docs = _docstrings()
+
+    assert "diary_write" in docs["hold"]
+    assert "不要拿 diary 替代 hold" in docs["diary_write"]
+
+
 def test_server_py_keeps_crlf_line_endings():
     """server.py 全文 CRLF。用默认模式读写会把 1262 行整篇重写，
     掩盖真实改动、也污染 diff —— 这条就是为了把那次事故钉住。"""
