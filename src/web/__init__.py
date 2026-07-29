@@ -24,6 +24,7 @@ from . import plans
 from . import letters
 from . import hooks
 from . import buckets
+from . import admin
 from . import import_api
 from . import github
 from . import embedding
@@ -47,6 +48,9 @@ def register_all(mcp) -> None:
     letters.register(mcp)
     hooks.register(mcp)
     buckets.register(mcp)
+    # admin：/admin 整理后台（筛选/批量改/归档还原/删除前先导出）。
+    # 与 buckets 共用 bucket_mgr，不新建服务。
+    admin.register(mcp)
     import_api.register(mcp)
     github.register(mcp)
     embedding.register(mcp)
