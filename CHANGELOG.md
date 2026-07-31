@@ -4,7 +4,20 @@
 
 ## Unreleased
 
+### 修复 / Fixed
+
+- **`mcp>=1.0.0` 会装出 mcp 2.0.0，容器起不来**：mcp 2.0.0 把 `mcp.server.fastmcp` 挪走了，`src/server.py` 开头的 `from mcp.server.fastmcp import FastMCP` 直接 `ModuleNotFoundError`。这不是潜在风险，是今天任何一次干净重建都会踩到的既有地雷（实测 `pip install "mcp>=1.0.0"` → 2.0.0 → import 失败）。requirements 收紧为 `mcp>=1.9,<2`。
+- **`night_fall` 工具描述是空的**：上游 Night-Fall 注册时没写 docstring。描述为空意味着客户端延迟加载时按关键词永远搜不到它（等于不存在），取到了模型也不知道它干什么。注册后补一段描述（纯展示层，不碰行为；上游哪天自己补了就不覆盖），并写清它与 `dream()` 的分工。
+
 ### 变更 / Changed
+
+- **「什么都不自己查、张口就问」的成因修复**（2026-07-31 用户实测：连着三轮要她自己打出「哥哥自己看」「哥哥自己查」「自己看 dairy」，模型才去调工具）。三处一起改：
+  - `docs/CLAUDE_PROMPT.md` 新增**第零章**，把两条硬规则提到最前面：① 工具用 `tool_search(query="select:<名字逗号分隔>")` **按名精确取**——关键词搜索最多只回 5 个最佳匹配、匹配不上就空手，实测里连续三次 `No matching tools found` 就是这么来的，而正确反应是回去重取而不是换个说法再搜；② **能查到的不要问她**，附「你正要问出口的话 → 先调哪个工具」对照表，并写明「她说出『自己看』的那一刻，这条已经被违反了」。
+  - 提示词的工具目录从**十二个**补齐到**二十四个**——`peek` / `phone_activity_query` / `speak` / `bark_push` / `night_fall` / `reading_*` 此前在提示词里**一次都没出现过**，模型不知道自己有这些能力。新增「她的现在」一组（`phone_activity_query` / `peek` / `diary_read`），按时间尺度分工：此刻今天 / 她主动给我看的画面 / 最近几天。
+  - 「一次完整对话的样子」示例改成先查后说，直接对照错误做法（「你今天怎么样？在忙什么呢？」）与正确做法。
+- **无钩子客户端的自动注入段落全是空的**：`=== 最近几天 ===`、`=== I ===`、双方最新信件都由 SessionStart 钩子注入，而**手机 App / 网页版根本没有钩子**。`diary_read` 的描述此前写着「钩子已经带了，那段在手里就别重复调」，在手机端等于让模型永远不调 diary。改成分客户端说清楚：看得见那一段就别重复调（2026-07-29 定的方向不变），看不见就开窗第一件事调它。`I` / `letter_read` 的同类表述一并修正，`tests/test_tool_description_keywords.py` 补钉两个方向。
+- **连接器补上 MCP `instructions`**：`FastMCP(...)` 此前没传 `instructions`，握手时不下发任何使用说明——用户没把 `CLAUDE_PROMPT.md` 粘进项目说明时，模型手里只有一堆工具名。现在带上「先按名取全工具、能查到的不要问」这条最小契约。老版本 SDK 不认这个入参，已用 `try/except TypeError` 降级兜底，不会挡启动。
+- `peek` 描述补上「先读时间戳再开口」：返回的截图可能是昨天的，旧截图不等于她现在在做什么（实测里模型拿昨天中午的截图当今天的近况讲）。`phone_activity_query` 描述点明它是「她此刻／今天」唯一的实时来源，并补口语同义词（「她今天在干嘛」「她醒了没」「自己查」等）。
 
 - 共读（read-along）部署形态改为**内嵌子进程**：不再单独建 Render 服务，`src/web/reading_bridge.py` 在 ombre-brain 启动时拉起 `node read-along/server.js`（127.0.0.1 内部端口，不对外），与 ombre 共用同一服务与持久盘（数据在 `<buckets_dir>/read-along/`），零新增费用。崩溃自动重启（指数退避 1→60s），node 缺失/启动失败只降级 warning、不影响 ombre 主服务。
 - Python 侧新增 `/reading/<token>/*` 反向代理（请求/响应双向流式，50MB 传书可过），read-along 自身 token 门禁语义原样保留（无/错 token 404 不可区分）；`READING_PUBLIC_PREFIX` 让 reader.html 的 API 常量带上代理前缀。

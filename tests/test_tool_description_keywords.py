@@ -113,18 +113,28 @@ def test_time_window_tools_declare_their_boundaries():
 
 
 def test_diary_read_defers_to_the_session_start_hook():
-    """连贯性优先于「多调工具」。
+    """连贯性优先于「多调工具」——但只在钩子真的存在的客户端上。
 
     2026-07-29 第一版写的是「被问到近况先调这个」——逼模型多调一次工具。
     用户否掉了这个方向：要的是开窗即在场，而不是每次现查。所以 diary 最近
     3 天改由 SessionStart 钩子带进来，本工具退成「钩子没覆盖到时才用」。
-    这条钉住的就是这个方向别再被掉回去。"""
+
+    2026-07-31 补丁：上面那条只对了一半。手机 App / 网页版**根本没有
+    SessionStart 钩子**，「=== 最近几天 ===」那一段永远不会出现，于是
+    「钩子会带给我」变成了「谁都没带」——用户实测里模型全程不调 diary_read，
+    要她自己打出「自己看 dairy」才去读。所以描述必须分两种客户端说清楚：
+    看得见那一段就别重复调（原方向不变），看不见就主动调（新增的那一半）。
+    这条同时钉住两个方向，缺一边都算回退。"""
     doc = _docstrings()["diary_read"]
 
     assert "唯一的读取路径" in doc
     assert "SessionStart" in doc
+    # 有钩子时不重复调 —— 2026-07-29 用户定的方向，不许掉回去
     assert "就别重复调本工具" in doc
     assert "先调这个" not in doc, "又掉回「逼模型多调工具」的写法了"
+    # 没钩子时必须主动调 —— 2026-07-31 补的另一半
+    assert "手机 App" in doc, "没写清手机端没有钩子，模型会以为钩子总在"
+    assert "开窗第一件事就调它" in doc, "缺了「无钩子客户端要主动调」这一半"
 
 
 def test_hold_and_diary_write_point_at_each_other():
