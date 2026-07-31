@@ -551,7 +551,8 @@ docker compose -f deploy/docker-compose.yml up -d
 | Claude.ai 添加 MCP 报「Couldn't register」 | OAuth 端点无法访问（通常是 Tunnel 未启动/域名错误） | 先确认 Dashboard 能正常访问，再添加 MCP |
 | OAuth 授权页正常弹出但密码输入后报错 | Dashboard 密码错误 | 使用 Dashboard 设置时的密码（不是 Cloudflare 密码） |
 | 连接成功但「no tools available」 | URL 末尾路径不是 `/mcp` | 确认连接 URL 末尾是 `/mcp` |
-| 每开新对话工具加载不全 / 偶尔搜不到某个工具 | **不是服务器问题**：同时启用的连接器太多时，Anthropic 客户端会改用 tool_search「延迟加载」，按描述去搜工具，命中带随机性 | 关掉该会话里用不到的其它连接器，把工具总数压到阈值以下即可一次性全部加载；或在 Claude.ai 自定义指令里列出全部工具名引导模型搜索 |
+| 每开新对话工具加载不全 / 对话里反复出现 `No matching tools found` | **不是服务器问题**：同时启用的连接器太多时，Anthropic 客户端会改用 tool_search「延迟加载」。用自然语言去搜（"看看她手机"）**最多只回 5 个最佳匹配，匹配不上就直接空手**，模型往往连搜几次就放弃了 | 让模型改用**按名精确取**：`tool_search(query="select:breath,hold,grow,trace,dream,peek,phone_activity_query,diary_read,diary_write,plan,pulse,anchor,release,letter_write,letter_read,I,speak,bark_push,night_fall")`——`select:` 前缀不走关键词匹配，不会搜不到。这一行已写进 `docs/CLAUDE_PROMPT.md` 第零章；也可以直接关掉该会话用不到的其它连接器，把工具总数压到阈值以下 |
+| 模型什么都不自己查，张口就问「你今天在忙什么」 | 提示词没把「先查再问」写成硬规则，或用户根本没粘 `CLAUDE_PROMPT.md`；另外手机 App / 网页版**没有 SessionStart 钩子**，`=== 最近几天 ===` / `=== I ===` 这些自动注入段落全都不存在，模型以为「钩子会带给我」就不主动调了 | 把 `docs/CLAUDE_PROMPT.md` 完整粘进项目说明（第零章 0.2 是那条铁律）。另外连接器现在自带 MCP `instructions`（握手时随 initialize 下发），支持的客户端上，没粘提示词也会带上「先取全工具、能查的不要问」这条最小契约 |
 | 工具调用显示「执行报错」但记忆其实写进去了 | **不是服务器问题**：服务端已成功返回，是 Claude.ai 连接器/渲染层把一次成功往返显示成了报错 | 用 `letter_read` 或 Dashboard 确认数据已落盘；服务端日志 `phase=ok` 即表示成功 |
 | 向量化不生效 / 语义检索没结果（压缩却正常） | base_url 漏 `/v1`（→404）、model 漏 `BAAI/` 前缀（→Model does not exist），或在 Dashboard 改了 key 没重建引擎 | 用 Dashboard 向量化区的「测试」按钮自查；按上面「用硅基流动…」一节填对 base_url 与 model；错误详情见设置页错误面板（OB-E001） |
 | 自有前端 / GPT / GLM 调用 MCP 工具被 401 卡住 | 默认强制 OAuth，自定义客户端不走该流程 | 设 `OMBRE_MCP_REQUIRE_AUTH=false`（或 `config.yaml: mcp_require_auth: false`）后重启；详见「方式三：接入自有前端」 |

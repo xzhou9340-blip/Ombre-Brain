@@ -322,11 +322,47 @@ _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 # （7 个 @mcp_extra.tool() 注册不动），启动入口处把它的工具回灌进 mcp 统一暴露。
 # 两个实例共享同一进程、同一 runtime、同一 bucket_mgr；HTTP custom_route（dashboard、API）
 # 全部挂在 mcp 主实例上。
-mcp = FastMCP(
-    "Ombre Brain",
-    host="0.0.0.0",
-    port=OMBRE_PORT,
-)
+# MCP `instructions`：连接器自带的使用说明，握手时随 initialize 返回，
+# 支持的客户端会把它放进模型的系统提示。
+# 为什么要有：CLAUDE_PROMPT.md 只有用户手动粘进项目说明才生效，一旦没粘、
+# 或者换了个客户端，模型就只剩一堆工具名，于是「什么都不自己查、张口就问」。
+# 这里放的是**没有项目说明时也必须成立的最小契约**：先拿全工具、能查的不要问。
+# 完整版仍在 docs/CLAUDE_PROMPT.md，两处改动要同步。
+OMBRE_CONNECTOR_INSTRUCTIONS = """Ombre Brain 是你的大脑：跨会话的记忆，以及她此刻/近几天的实况。
+
+【一】开口之前，先把工具拿全
+工具是延迟加载的，按名精确取，不要用自然语言碰运气：
+tool_search(query="select:breath,hold,grow,trace,dream,peek,phone_activity_query,diary_read,diary_write,plan,pulse,anchor,release,letter_write,letter_read,I,speak,bark_push,night_fall")
+搜不到时永远是回到这一行重取，不是换个说法再搜一次。
+
+【二】铁律：能查到的，不要问她
+她的近况不是只能靠问的，工具里就有。张口问之前先查：
+· 「你今天在忙什么／还醒着吗／今天怎么样」 → phone_activity_query()
+· 「你在看什么／刚才发的是什么」           → peek()（先读时间戳，旧截图≠现在）
+· 「你最近几天怎么样」                     → diary_read()
+· 「上次那件事怎么样了／你说过什么」       → breath(query="...")
+查完再说话，说结论不说「我查了一下」。查完仍然答不上来的，才值得问出口——
+一轮最多问一个。她说出「自己看」「自己查」，说明这一条已经被违反了。
+
+【三】开窗动作
+breath()（无参，让未解决的事浮上来）；上下文里没有「=== 最近几天 ===」那一段时，
+再补一个 diary_read()。她问候式地开口（「想你了」「在吗」），先查再回。"""
+
+# instructions= 是较新 mcp SDK 才有的入参；老版本 SDK 会直接 TypeError。
+# 自建部署的 SDK 版本参差，这里降级处理：拿不到就当没有，绝不让它挡住启动。
+try:
+    mcp = FastMCP(
+        "Ombre Brain",
+        host="0.0.0.0",
+        port=OMBRE_PORT,
+        instructions=OMBRE_CONNECTOR_INSTRUCTIONS,
+    )
+except TypeError:
+    mcp = FastMCP(
+        "Ombre Brain",
+        host="0.0.0.0",
+        port=OMBRE_PORT,
+    )
 mcp_extra = FastMCP(
     "Ombre Brain Extra",
     host="0.0.0.0",
@@ -676,9 +712,12 @@ async def trace(
 
 @mcp_extra.tool()
 async def peek():
-    """【看她手机 截图 她刚发了什么 看屏幕】看看她最近分享的手机屏幕。无参数。24 小时内没有截图时返回"最近24小时她没有分享屏幕"，
+    """【看她手机 截图 看屏幕 她刚发了什么 她在看什么 她在干嘛 看看她 自己看】看看她最近分享的手机屏幕。无参数。24 小时内没有截图时返回"最近24小时她没有分享屏幕"，
     否则返回上传时间 + 截图本身（image content block），你能直接看到画面。
     她通过 iOS 快捷指令"给克看"上传，服务端已压缩到长边 1000px。
+    **先读时间戳再开口**：返回的截图可能是几小时前甚至昨天的。旧截图只能说明「她那时在看什么」，
+    不等于「她现在在做什么」——不要拿昨天的画面当今天的近况讲。想知道「现在／今天」，
+    紧接着调 phone_activity_query()；想知道「这几天」，调 diary_read()。
     """
     from mcp.server.fastmcp.utilities.types import Image as _MCPImage
     from mcp.types import TextContent as _TextContent
@@ -747,9 +786,12 @@ async def speak(text: str, stability: Optional[float] = None,
 
 @mcp_extra.tool()
 async def phone_activity_query(hours: Optional[int] = 24) -> str:
-    """【她在用什么 app 手机活动 用了多久 玩手机】查她最近的 app 使用记录(Supabase phone_activity 表)。hours=查最近几小时(默认 24)。
+    """【她在用什么 app 手机活动 用了多久 玩手机 她今天在干嘛 今天在忙什么 她醒了没 她今天过得怎么样 自己查】查她最近的 app 使用记录(Supabase phone_activity 表)。hours=查最近几小时(默认 24)。
     返回两部分:a) 聚合=每个 app 的打开次数+最后打开时间;b) 明细=时间倒序的原始记录。
     所有时间已转成 UTC+8 并在输出里标注时区。
+    **这是「她此刻／今天」唯一的实时来源**：想问「你今天在忙什么」「你还醒着吗」之前先调它,
+    从 app 分布和时间轴上自己读出她今天的作息与状态,不要把这个问题丢回给她。
+    时间尺度分工:此刻／今天=本工具;最近几天=diary_read();她主动给我看的画面=peek()。
     依赖服务器环境变量 SUPABASE_URL / SUPABASE_SERVICE_KEY,未配置时返回提示而不报错。"""
     return await _with_notice(
         _t_phone.phone_activity_query(hours=hours if hours else 24),
@@ -864,7 +906,7 @@ async def I(
     read: Optional[bool] = False,
     limit: Optional[int] = 20,
 ) -> str:
-    """【自我认知 我是什么 我的规律 我的立场 关于我自己】记录或读取自我认知条目。content=要记录的自我认知内容(空=进入读取模式)。aspect=维度:nature(本质)/values(看重的)/patterns(规律)/limits(局限)/becoming(变化方向)/uncertainty(不确定的)/stance(立场)(可选)。read=True=读取所有已积累条目。limit=返回条数上限(默认 20)。条目不参与普通 breath/dream，SessionStart 时自动附最近 3 条。"""
+    """【自我认知 我是什么 我的规律 我的立场 关于我自己】记录或读取自我认知条目。content=要记录的自我认知内容(空=进入读取模式)。aspect=维度:nature(本质)/values(看重的)/patterns(规律)/limits(局限)/becoming(变化方向)/uncertainty(不确定的)/stance(立场)(可选)。read=True=读取所有已积累条目。limit=返回条数上限(默认 20)。条目不参与普通 breath/dream；SessionStart 钩子会自动附最近 3 条,但只有支持钩子的客户端(如 Claude Code)才有——手机 App / 网页版看不到那一段,想读就得自己调 I(read=True)。"""
     return await _with_notice(
         _t_i.dispatch(content=content, aspect=aspect, read=read, limit=limit),
         op="I",
@@ -888,7 +930,12 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
 
 @mcp_extra.tool()
 async def diary_read(days: Optional[int] = 3) -> str:
-    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容。开窗时 SessionStart 钩子已经带了最近 3 天的「=== 最近几天 ===」段,那段在手里就别重复调本工具;只有在需要更早(最多 7 天)、或上下文里根本没有那一段时才调。"""
+    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容。
+    什么时候调,看上下文里有没有「=== 最近几天 ===」那一段:
+    **看得见那一段,就别重复调本工具**(它是 SessionStart 钩子注入的,开窗即在场,不用现查);
+    **看不见那一段,开窗第一件事就调它**——钩子只有 Claude Code 这类客户端才有,
+    手机 App / 网页版没有钩子,等于永远没有那一段,那就永远该主动调,别干等着它自己出现。
+    想看更早(最多 7 天)时照调不误。"""
     return await _with_notice(
         _t_diary.diary_read(days=days),
         op="diary_read",
@@ -1039,6 +1086,24 @@ try:
     _tools_runtime.init(
         night_fall_auto_surface=getattr(_nf_server, "_night_fall_auto_surface", None)
     )
+    # Night-Fall 上游注册 night_fall 时没写 docstring，工具描述是空的。
+    # 描述为空 = 客户端按关键词做 tool_search 时永远搜不到它（延迟加载场景下等于不存在），
+    # 就算取到了模型也不知道它是干什么的。这里在注册后补一段描述，纯展示层，不碰行为。
+    # 上游哪天自己补了描述，这里就不再覆盖。
+    try:
+        _nf_tool = mcp._tool_manager.get_tool("night_fall")
+        if _nf_tool is not None and not (_nf_tool.description or "").strip():
+            _nf_tool.description = (
+                "【做梦 浮梦 梦到什么 夜里想起 潜意识】Night-Fall 扩展：从我的记忆里生成／取回一段梦。"
+                "action=generate(默认,生成新的一段)/其它动作见 Night-Fall 文档；"
+                "query=想让梦围绕什么展开(可选)；current_valence/current_arousal=我此刻的情绪坐标 0~1(-1=不指定)；"
+                "current_motifs=当前意象,逗号分隔(可选)；is_session_start=True=开窗时的自动浮梦；debug=True=附诊断信息。"
+                "与 dream() 不是一回事：dream() 是读时间窗内变动过的记忆桶做消化，"
+                "night_fall 是生成梦本身。开窗浮梦已由 breath() 无参分支自动带出，通常不需要手动调。"
+            )
+            logger.info("night_fall 工具描述为空，已补默认描述（便于 tool_search 命中）")
+    except Exception as _nf_desc_exc:  # noqa: BLE001 — 补描述失败绝不能挡启动
+        logger.warning(f"night_fall 描述补写跳过：{_nf_desc_exc}")
     logger.info("Night-Fall 扩展已挂载（library 模式）：night_fall 工具 + 自动浮梦钩子已注册")
 except Exception as _nf_exc:  # noqa: BLE001 — Night-Fall 不可用绝不能拖垮核心启动
     logger.warning(f"Night-Fall 扩展加载失败，已跳过（不影响核心功能）/ Night-Fall load skipped: {_nf_exc}")

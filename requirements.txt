@@ -4,7 +4,11 @@
 # ============================================================
 
 # MCP 协议 SDK（MCP 通信核心）
-mcp>=1.0.0
+# 上限锁 <2：mcp 2.0.0 把 `mcp.server.fastmcp` 整个挪走了，server.py 第一行
+# `from mcp.server.fastmcp import FastMCP` 直接 ModuleNotFoundError，容器起不来。
+# 原来写的是 mcp>=1.0.0，今天装出来就是 2.0.0 —— 任何一次干净重建都会炸。
+# 下限抬到 1.9：FastMCP(instructions=...) 要这个版本才有（server.py 已做降级兜底）。
+mcp>=1.9,<2
 
 # 模糊匹配（记忆桶搜索）
 rapidfuzz>=3.0.0
