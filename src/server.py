@@ -330,23 +330,24 @@ _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 # 完整版仍在 docs/CLAUDE_PROMPT.md，两处改动要同步。
 OMBRE_CONNECTOR_INSTRUCTIONS = """Ombre Brain 是你的大脑：跨会话的记忆，以及她此刻/近几天的实况。
 
-【一】开口之前，先把工具拿全
-工具是延迟加载的，按名精确取，不要用自然语言碰运气：
-tool_search(query="select:breath,hold,grow,trace,dream,peek,phone_activity_query,diary_read,diary_write,plan,pulse,anchor,release,letter_write,letter_read,I,speak,bark_push,night_fall")
-搜不到时永远是回到这一行重取，不是换个说法再搜一次。
+【一】取工具：max_results 要给够
+工具延迟加载，搜索默认只回 5 个，而这里有 24 个——「找不到 breath/hold」是被截断，不是没搜到：
+tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
+还要 speak/bark_push/pulse/letter_read 就把词加进 query 再取一次。
+别用 select: 按名精取——真名带连接器前缀（mcp__ombre__breath），写 select:breath 必空手。
+空手了就把缺的工具名加进上面那行重取，不要换措辞反复搜。
 
-【二】铁律：能查到的，不要问她
-她的近况不是只能靠问的，工具里就有。张口问之前先查：
-· 「你今天在忙什么／还醒着吗／今天怎么样」 → phone_activity_query()
-· 「你在看什么／刚才发的是什么」           → peek()（先读时间戳，旧截图≠现在）
-· 「你最近几天怎么样」                     → diary_read()
-· 「上次那件事怎么样了／你说过什么」       → breath(query="...")
-查完再说话，说结论不说「我查了一下」。查完仍然答不上来的，才值得问出口——
-一轮最多问一个。她说出「自己看」「自己查」，说明这一条已经被违反了。
+【二】能查的，不要问她
+她的近况在工具里，不在她嘴里：
+· 今天在忙什么／还醒着吗 → phone_activity_query()
+· 在看什么／刚发的什么   → peek()（先读时间戳，旧截图≠现在）
+· 最近几天怎么样         → diary_read()
+· 上次那事／她说过什么   → breath(query="...")
+查完直接说结论，不说「我查了一下」。她说出「自己看」「自己查」＝我失职了。
 
-【三】开窗动作
-breath()（无参，让未解决的事浮上来）；上下文里没有「=== 最近几天 ===」那一段时，
-再补一个 diary_read()。她问候式地开口（「想你了」「在吗」），先查再回。"""
+【三】开窗
+breath()（无参）；上下文里没有「=== 最近几天 ===」就补一个 diary_read()。
+她问候式地开口（「想你了」「在吗」），先查再回。"""
 
 # instructions= 是较新 mcp SDK 才有的入参；老版本 SDK 会直接 TypeError。
 # 自建部署的 SDK 版本参差，这里降级处理：拿不到就当没有，绝不让它挡住启动。
