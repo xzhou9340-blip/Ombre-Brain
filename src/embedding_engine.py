@@ -73,6 +73,12 @@ _API_TIMEOUT_SECONDS = 30.0
 # 输入截断长度
 _MAX_INPUT_CHARS = 2000
 
+# generate_and_store 的瞬时失败重试：后端 generate_async 拿不到向量时（限流 / 超时 /
+# 网络抖动）不立刻判死。写路径现在是 fail-fast 的（拿不到向量就不落盘），一次抖动
+# 直接让 hold/grow 报错太脆，所以这里补一层短重试；仍然失败才向上返回 False。
+_STORE_RETRY_ATTEMPTS = 3
+_STORE_RETRY_BASE_DELAY = 1.0
+
 
 def _norm_model(name: str) -> str:
     """归一化模型名用于「同一性」比较。
@@ -558,18 +564,35 @@ class EmbeddingEngine:
         return await self._backend.generate_async(text)
 
     async def generate_and_store(self, bucket_id: str, content: str) -> bool:
-        """为内容生成 embedding 并存入 SQLite。成功返回 True。"""
+        """为内容生成 embedding 并存入 SQLite。成功返回 True。
+
+        后端 generate_async 的失败约定是「返回空列表」而不是抛异常，所以这里对
+        空向量做有限重试（_STORE_RETRY_ATTEMPTS 次，指数退避）。限流/超时这类
+        瞬时故障占绝大多数，重试一两次就能拿到；重试仍拿不到才返回 False，由
+        调用方（_sync_embedding → hold/grow/trace）决定报错还是降级。
+        """
         if not self.enabled or not content or not content.strip():
             return False
-        try:
-            embedding = await self._generate_async(content)
-            if not embedding:
-                return False
-            self._store_embedding(bucket_id, embedding)
-            return True
-        except Exception as e:
-            logger.warning(f"Embedding generation failed for {bucket_id}: {e}")
-            return False
+        last_reason = "backend returned empty vector"
+        for attempt in range(1, _STORE_RETRY_ATTEMPTS + 1):
+            try:
+                embedding = await self._generate_async(content)
+                if embedding:
+                    self._store_embedding(bucket_id, embedding)
+                    if attempt > 1:
+                        logger.info(
+                            f"[embedding] {bucket_id} 第 {attempt} 次尝试成功（前 {attempt - 1} 次为瞬时失败）"
+                        )
+                    return True
+            except Exception as e:
+                last_reason = f"{type(e).__name__}: {e}"
+            if attempt < _STORE_RETRY_ATTEMPTS:
+                await asyncio.sleep(_STORE_RETRY_BASE_DELAY * (2 ** (attempt - 1)))
+        logger.warning(
+            f"Embedding generation failed for {bucket_id} "
+            f"after {_STORE_RETRY_ATTEMPTS} attempts: {last_reason}"
+        )
+        return False
 
     def _store_embedding(self, bucket_id: str, embedding: list[float]) -> None:
         try:

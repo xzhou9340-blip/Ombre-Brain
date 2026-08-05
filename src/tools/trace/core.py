@@ -26,6 +26,11 @@ trace 是 OB 唯一的「写元数据」入口，承接所有桶字段更新和�
 
 from typing import Optional
 
+try:
+    from bucket_manager import EmbeddingSyncError
+except ImportError:  # pragma: no cover
+    from ...bucket_manager import EmbeddingSyncError  # type: ignore
+
 from .. import _runtime as rt
 from .._common import check_content_size, check_pinned_quota
 
@@ -146,7 +151,19 @@ async def trace_core(
             history = append_plan_change_log(history, "edit")
         updates["change_log"] = history
 
-    success = await rt.bucket_mgr.update(bucket_id, **updates)
+    # update() 在 content 改写时会同步刷新向量；向量算不出来时抛
+    # EmbeddingSyncError，此时新正文已经落盘（不回滚），只是向量还是旧的。
+    # 这一档按降级处理：正文改动保留，用下面的 embed_rebuild_warn 明说。
+    embed_sync_failed = False
+    try:
+        success = await rt.bucket_mgr.update(bucket_id, **updates)
+    except EmbeddingSyncError as _sync_exc:
+        success = True
+        embed_sync_failed = True
+        rt.logger.warning(
+            f"op=trace phase=embed_rebuild_fail bucket_id={bucket_id} "
+            f"reason={type(_sync_exc).__name__}: {_sync_exc}"
+        )
     if not success:
         return f"修改失败: {bucket_id}"
 
@@ -154,14 +171,17 @@ async def trace_core(
     # 记日志 + 在返回文本里提示，否则向量还是旧正文的，语义检索悄悄失准。
     embed_rebuild_warn = ""
     if "content" in updates:
-        try:
-            embed_ok = await rt.embedding_engine.generate_and_store(bucket_id, updates["content"])
-        except Exception as _embed_exc:
+        if embed_sync_failed:
             embed_ok = False
-            rt.logger.warning(
-                f"op=trace phase=embed_rebuild_fail bucket_id={bucket_id} "
-                f"reason={type(_embed_exc).__name__}: {_embed_exc}"
-            )
+        else:
+            try:
+                embed_ok = await rt.embedding_engine.generate_and_store(bucket_id, updates["content"])
+            except Exception as _embed_exc:
+                embed_ok = False
+                rt.logger.warning(
+                    f"op=trace phase=embed_rebuild_fail bucket_id={bucket_id} "
+                    f"reason={type(_embed_exc).__name__}: {_embed_exc}"
+                )
         if not embed_ok:
             embed_rebuild_warn = (
                 "\n⚠️ 正文已替换，但 embedding 重建失败：该桶暂不参与语义检索，"

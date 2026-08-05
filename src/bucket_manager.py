@@ -143,6 +143,15 @@ def _clamp01(value, default: float) -> float:
         return default
 
 
+class EmbeddingSyncError(RuntimeError):
+    """向量写入失败：桶正文本身没问题，只是这次算不出/存不下向量。
+
+    与「embedding 未配置」区分开——后者在碰文件之前就拒绝（普通 RuntimeError），
+    而这个异常意味着 create() 已经写过文件（会自行回滚删除）或 update() 已经把
+    新正文落了盘（不回滚，由调用方降级提示）。调用方靠类型区分这两种处境。
+    """
+
+
 class BucketManager:
     """
     Memory bucket manager — entry point for all bucket CRUD operations.
@@ -265,12 +274,24 @@ class BucketManager:
 
         调用前必须已经过 _require_embedding_available() 校验。这里仍然
         显式重复防御一次（未启用直接抛），失败时也不再降级吞掉——调用方
-        没有 embedding 就不该被允许把内容落盘。"""
+        没有 embedding 就不该被允许把内容落盘。
+
+        ⚠️ generate_and_store 的失败约定是「返回 False」而不是抛异常。早期这里
+        丢掉了返回值，于是 API 限流/超时时向量没写成，create() 的回滚分支和
+        update() 的报错分支都不会触发——桶正常落盘、正常出现在 pulse 列表里，
+        却永远进不了 breath(query=...) 的语义召回，只能靠关键词碰运气。
+        「记了但搜不出来」的缺失向量就是这么攒出来的。返回 False 一律抛。"""
         if not self.embedding_engine or not getattr(self.embedding_engine, "enabled", False):
             raise RuntimeError("embedding 未配置或未启用，拒绝写入。")
         if not content or not content.strip():
             return
-        await self.embedding_engine.generate_and_store(bucket_id, content)
+        ok = await self.embedding_engine.generate_and_store(bucket_id, content)
+        if not ok:
+            raise EmbeddingSyncError(
+                f"embedding 生成失败（bucket {bucket_id}）：向量化服务多次重试仍未返回向量。"
+                "为避免写出「存得下却搜不到」的记忆，本次写入已拒绝，请检查 "
+                "OMBRE_EMBED_API_KEY / 配额，或稍后重试。"
+            )
 
     def _invalidate_bm25(self) -> None:
         """写操作后调用，标记 BM25 索引需要重建。search() 时懒触发。"""

@@ -393,12 +393,24 @@ class DecayEngine:
         if not missing:
             return 0
         healed = 0
+        failed = 0
         for b in missing[:_BACKFILL_MAX_PER_CYCLE]:
             try:
-                await ee.generate_and_store(b["id"], b["content"])
-                healed += 1
+                # generate_and_store 失败时返回 False（不抛），只数真正补上的：
+                # 早期无条件 healed += 1，向量化整体挂掉时日志照报「自愈 N 条」，
+                # 缺失数却一轮不降，等于把唯一的告警信号盖住了。
+                if await ee.generate_and_store(b["id"], b["content"]):
+                    healed += 1
+                else:
+                    failed += 1
             except Exception as e:
+                failed += 1
                 logger.warning(f"self-heal embeddings: 补 {b['id']} 失败: {e}")
+        if failed:
+            logger.warning(
+                f"Decay self-heal / 自愈补向量：{failed} 条仍未补上"
+                f"（缺失总数 {len(missing)}），检查向量化服务是否可用"
+            )
         if healed:
             remaining = len(missing) - healed
             logger.info(
