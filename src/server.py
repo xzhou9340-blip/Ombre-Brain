@@ -330,12 +330,16 @@ _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 # 完整版仍在 docs/CLAUDE_PROMPT.md，两处改动要同步。
 OMBRE_CONNECTOR_INSTRUCTIONS = """Ombre Brain 是你的大脑：跨会话的记忆，以及她此刻/近几天的实况。
 
-【一】取工具：max_results 要给够
-工具延迟加载，搜索默认只回 5 个，而这里有 24 个——「找不到 breath/hold」是被截断，不是没搜到：
-tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
-还要 speak/bark_push/pulse/letter_read 就把词加进 query 再取一次。
-别用 select: 按名精取——真名带连接器前缀（mcp__ombre__breath），写 select:breath 必空手。
-空手了就把缺的工具名加进上面那行重取，不要换措辞反复搜。
+【一】取工具：按名精取，别靠搜索排名
+工具延迟加载。关键词搜索默认只回 5 个，而这里有 24 个工具——「找不到 breath」是被排名截断，
+不是没搜到。所以第一步不要搜关键词，直接按全名精取（不看排名，要几个回几个）：
+tool_search(query="select:mcp__ombre__breath,mcp__ombre__hold,mcp__ombre__diary_read,mcp__ombre__peek,mcp__ombre__phone_activity_query,mcp__ombre__dream,mcp__ombre__trace,mcp__ombre__grow", max_results=10)
+要点：select: 后面必须是**带连接器前缀的全名**，写 select:breath 一定空手。
+还要 speak/bark_push/pulse/letter_read/plan/I/letter_write 就照同样格式补进去。
+万一整条回空 = 这个客户端把连接器命名成了别的（前缀不是 ombre）：
+退回 tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)，
+从返回里任意一个工具的 name 上读出真实前缀，再用那个前缀重跑上面的 select:。
+不要换措辞反复搜关键词——搜三次都空手，是排名问题，多搜一次也不会变。
 
 【二】能查的，不要问她
 她的近况在工具里，不在她嘴里：

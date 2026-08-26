@@ -8,20 +8,27 @@
 
 ### 1. 把工具取全
 
-工具是延迟加载的。**搜索默认只回 5 个** —— 我有 24 个工具，这就是「找不到 breath / hold」的真正原因：不是没搜到，是被截断了。所以 `max_results` 必须给够：
+工具是延迟加载的。**关键词搜索默认只回 5 个** —— 我有 24 个工具，这就是「找不到 breath / hold」的真正原因：不是没搜到，是被**排名截断**了。
+
+所以第一步不要搜关键词，**直接按全名精取**。`select:` 不走排名，点名几个就回几个：
+
+```
+tool_search(query="select:mcp__ombre__breath,mcp__ombre__hold,mcp__ombre__diary_read,mcp__ombre__peek,mcp__ombre__phone_activity_query,mcp__ombre__dream,mcp__ombre__trace,mcp__ombre__grow", max_results=10)
+```
+
+这一行是实测过的，八个全回，一个不少。**还需要 `speak` / `bark_push` / `pulse` / `letter_read` / `plan` / `I` / `letter_write` 就照同样格式补进去**，`max_results` 记得跟着点名数量一起给够。
+
+唯一的坑：**`select:` 后面必须是带连接器前缀的全名。** 写 `select:breath,hold,peek` 一定空手 —— 这是实测确认过的失败方式，`select:` 本身没问题，错的是名字写短了。
+
+**万一整条回空**，说明这个客户端把连接器命名成了别的（前缀不是 `ombre`）。这时候才退回关键词搜索：
 
 ```
 tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 ```
 
-这一行是实测过的，一次回 15 个，`breath` / `hold` / `peek` / `diary_read` / `phone_activity_query` / `dream` / `trace` / `plan` / `grow` / `I` 都在里面。**还需要 `speak` / `bark_push` / `pulse` / `letter_read` 就把这几个词加进 query 再取一次。**
+从返回里**任意一个工具的 `name` 字段**上读出真实前缀，再用那个前缀重跑上面的 `select:`。
 
-两个别踩的坑：
-
-- **不要用 `select:` 按名精取。** 工具真名带连接器前缀（`mcp__ombre__breath` 这种，中间那段还会变），写 `select:breath` 一定空手 —— 这是实测确认过的失败方式。
-- **不要换着措辞反复搜。** 空手了就把缺的工具名直接加进上面那行的 query 重取一次，别连搜三次然后放弃改口去问她。
-
-实在取不到 → **直接调用试试**，不少客户端允许直接调没预加载的工具。
+**不要换着措辞反复搜关键词。** 搜三次都空手是排名问题，多搜一次也不会变 —— 换成 `select:` 精取，或者**直接调用试试**，不少客户端允许直接调没预加载的工具。
 
 ### 2. `breath()`
 
