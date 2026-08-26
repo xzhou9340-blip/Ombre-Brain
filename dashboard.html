@@ -1724,6 +1724,205 @@
     transition: opacity 0.3s;
   }
   .self-overlay.show { opacity: 1; pointer-events: auto; }
+
+  /* ====== 颜文字抽屉 kaomoji drawer ======
+     交互与配色移植自 KaomojiDrawerKit（SwiftUI，MIT，(c) 2026 Pyruslili）
+     https://github.com/Pyruslili/KaomojiDrawerKit
+     原版是 iOS/macOS 的 .sheet 底部抽屉，这里保留它的骨架（横向分类 tab /
+     点一下只插入不发送 / 增删自己的 / 本地持久化），配色换成仪表板这套暖米灰。 */
+  .km-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(44, 42, 38, 0.42);
+    backdrop-filter: blur(4px);
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .km-overlay.show { display: flex; }
+  .km-sheet {
+    width: min(680px, 96vw);
+    max-height: 78vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    background-image: radial-gradient(circle at 85% 4%, var(--accent-glow), transparent 320px);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -10px 40px var(--shadow-dark);
+  }
+  .km-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px 10px;
+  }
+  .km-head-title { flex: 1; text-align: center; line-height: 1.3; }
+  .km-head-title b { display: block; font-size: 15px; font-weight: 600; color: var(--text); }
+  .km-head-title span { font-size: 10px; color: var(--text-dim); }
+  .km-icon-btn {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--accent);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 3px 3px 6px var(--shadow-dark-subtle), -3px -3px 6px var(--shadow-light);
+  }
+  .km-icon-btn:hover { border-color: var(--border-strong); }
+  .km-icon-btn.active {
+    background: var(--accent-glow);
+    border-color: var(--accent);
+    box-shadow: inset 2px 2px 5px var(--shadow-dark-subtle), inset -2px -2px 5px var(--shadow-light);
+  }
+  .km-tabs {
+    /* 抽屉高度封顶在 78vh，不锁住 flex 的话头部和 tab 会被正文挤扁 */
+    flex: 0 0 auto;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 4px 16px 8px;
+    scrollbar-width: none;
+  }
+  .km-tabs::-webkit-scrollbar { display: none; }
+  .km-tab {
+    flex: 0 0 auto;
+    height: 30px;
+    padding: 0 13px;
+    border-radius: 15px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .km-tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+  }
+  .km-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: 18px; }
+  .km-section-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--bg);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .km-section-head span { font-size: 11px; font-weight: 400; color: var(--text-dim); }
+  .km-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 8px;
+    padding: 0 16px 20px;
+  }
+  .km-cell { position: relative; }
+  .km-cell button.km-face {
+    width: 100%;
+    min-height: 42px;
+    padding: 6px 11px;
+    text-align: left;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.35;
+    cursor: pointer;
+    word-break: break-all;
+  }
+  .km-cell button.km-face:hover { border-color: var(--accent); }
+  .km-cell.editing button.km-face { padding-right: 32px; cursor: default; }
+  .km-del {
+    display: none;
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background: none;
+    color: #b4483f;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+  }
+  .km-cell.editing .km-del { display: inline-flex; }
+  .km-add {
+    margin: 6px 16px 0;
+    padding: 14px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .km-add-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .km-add-head select {
+    flex: 0 0 auto;
+    max-width: 46%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 2px;
+  }
+  .km-add-row { display: flex; gap: 8px; }
+  .km-add-row input {
+    flex: 1;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .km-add-row button {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .km-add-row button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .km-empty { text-align: center; color: var(--text-dim); font-size: 13px; padding: 40px 0; }
 </style>
 </head>
 <body>
@@ -1747,6 +1946,9 @@
   <symbol id="i-edit" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2 L14 5 L6 13 L2 14 L3 10 Z"/><line x1="9" y1="4" x2="12" y2="7"/></symbol>
   <symbol id="i-coffee" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6 L3 12.5 C3 13.3 3.7 14 4.5 14 L9.5 14 C10.3 14 11 13.3 11 12.5 L11 6 Z"/><path d="M11 7.5 L12.5 7.5 C13.6 7.5 14.5 8.4 14.5 9.5 C14.5 10.6 13.6 11.5 12.5 11.5 L11 11.5"/><path d="M6 2 C6 2 6.5 3.5 6 4.5"/><path d="M8.5 2 C8.5 2 9 3.5 8.5 4.5"/></symbol>
   <symbol id="i-ribbon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 7.5C7.5 7 3.5 4.5 3.5 2.5C3.5 1.5 4.2 1 5 1.5L8 5.5L11 1.5C11.8 1 12.5 1.5 12.5 2.5C12.5 4.5 8.5 7 8 7.5Z"/><path d="M8 8.5C7.5 9 3.5 11.5 3.5 13.5C3.5 14.5 4.2 15 5 14.5L8 10.5L11 14.5C11.8 15 12.5 14.5 12.5 13.5C12.5 11.5 8.5 9 8 8.5Z"/><circle cx="8" cy="8" r="1.8"/></symbol>
+  <symbol id="i-kaomoji-face" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round"><path d="M5.4 8.3 4.7 3.8 9.1 6.2c.9-.25 1.85-.38 2.9-.38 1.04 0 2 .13 2.9.38l4.4-2.4-.7 4.5c1.12 1.25 1.7 2.8 1.7 4.58 0 4.18-3.35 7.12-8.3 7.12s-8.3-2.94-8.3-7.12c0-1.78.58-3.33 1.7-4.58Z" stroke-width="1.15"/><path d="M7.75 11.7c.55-.58 1.15-.58 1.7 0M14.55 11.7c.55-.58 1.15-.58 1.7 0M9.75 15.05c.72.78 1.47.78 2.25 0 .78.78 1.53.78 2.25 0" stroke-width="1.05"/></symbol>
+  <symbol id="i-kaomoji-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round"><path d="M6.1 8.3 5.5 4.4l3.7 2.05A9.8 9.8 0 0 1 12 6.05c1 0 1.95.13 2.8.4l3.7-2.05-.6 3.9c1.35 1.2 2.1 2.75 2.1 4.55 0 3.95-3.2 6.65-8 6.65s-8-2.7-8-6.65c0-1.8.75-3.35 2.1-4.55Z" stroke-width="1.2"/><path d="m9.2 10.55 5.6 5.1M14.8 10.55l-5.6 5.1" stroke-width="1.2"/></symbol>
+  <symbol id="i-kaomoji-tidy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><rect x="4" y="6" width="13.5" height="4" rx="2" stroke-width="1.25"/><rect x="6.5" y="12.5" width="13.5" height="4" rx="2" stroke-width="1.25"/><path d="M8 8h5.5M10.5 14.5H16" stroke-width="1.1"/><path d="M19.2 3.4v3.2M17.6 5h3.2" stroke-width="1.1"/><path d="m4.8 18.3.38 1.05 1.02.4-1.02.38-.38 1.07-.4-1.07-1.05-.38 1.05-.4.4-1.05Z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-envelope" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="14" height="10" rx="1.5"/><polyline points="1,3.5 8,9.5 15,3.5"/></symbol>
 </svg>
 
@@ -2127,6 +2329,7 @@
         <textarea id="letter-content" placeholder="…" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:12px 14px;border-radius:2px;font-family:inherit;font-size:13px;line-height:1.7;min-height:180px;resize:vertical;box-shadow:inset 2px 2px 4px var(--shadow-dark-subtle), inset -2px -2px 4px var(--shadow-light);"></textarea>
       </div>
       <div style="display:flex;gap:14px;align-items:center;margin-top:6px;">
+        <button type="button" class="btn-secondary" onclick="openKaomojiDrawer('letter-content')" title="颜文字抽屉" aria-label="颜文字抽屉" style="padding:0 12px;height:36px;display:inline-flex;align-items:center;justify-content:center;"><svg class="icon" style="width:18px;height:18px;" aria-hidden="true"><use href="#i-kaomoji-face"></use></svg></button>
         <button class="btn-primary" onclick="sendLetter()" title="寄出" style="padding:0 16px;height:36px;display:inline-flex;align-items:center;gap:6px;"><i data-lucide="send"></i> 寄出</button>
         <span id="letter-status" style="font-size:12px;color:var(--text-dim);"></span>
       </div>
@@ -8404,6 +8607,269 @@ function renderSelfEntries() {
     }
   } catch (_) {}
 })();
+</script>
+
+<!-- ============================================================
+     颜文字抽屉 —— 移植自 KaomojiDrawerKit
+     https://github.com/Pyruslili/KaomojiDrawerKit  (MIT, (c) 2026 Pyruslili)
+
+     原版是给 iOS/macOS 聊天输入框用的 SwiftUI 组件。这边没有 Swift 侧，
+     所以把它的三样东西搬过来：21 个分类 / 204 个自带颜文字、抽屉本身的交互
+     （横向分类 tab、点一下只插入不发送、编辑态增删、本地持久化）、以及那三个
+     原创矢量图标。存储从 UserDefaults 换成 localStorage，键名沿用原版的
+     KaomojiDrawerKit.library.v1。
+     ============================================================ -->
+<div id="kaomoji-drawer" class="km-overlay" onclick="if(event.target===this)closeKaomojiDrawer()">
+  <div class="km-sheet" role="dialog" aria-modal="true" aria-label="颜文字抽屉">
+    <div class="km-head">
+      <button type="button" id="km-edit-btn" class="km-icon-btn" onclick="kmToggleEditing()" title="整理（增删）" aria-label="整理颜文字"><svg class="icon" style="width:20px;height:20px;" aria-hidden="true"><use href="#i-kaomoji-tidy"></use></svg></button>
+      <div class="km-head-title">
+        <b>颜文字</b>
+        <span id="km-count"></span>
+      </div>
+      <button type="button" class="km-icon-btn" onclick="closeKaomojiDrawer()" title="关闭" aria-label="关闭抽屉"><svg class="icon" style="width:20px;height:20px;" aria-hidden="true"><use href="#i-kaomoji-close"></use></svg></button>
+    </div>
+    <div class="km-tabs" id="km-tabs"></div>
+    <div class="km-body" id="km-body"></div>
+  </div>
+</div>
+
+<script>
+// ====== 颜文字抽屉 ======
+// 数据与交互移植自 KaomojiDrawerKit（MIT, (c) 2026 Pyruslili）。
+// Swift 版的 KaomojiLibraryStore 用 UserDefaults，这里用 localStorage，键名不变，
+// 结构也不变（[{name, items:[...]}, ...]），方便以后两边互导。
+const KM_STORAGE_KEY = 'KaomojiDrawerKit.library.v1';
+const KM_MY_CATEGORY = '我的';
+const KM_BUNDLED = [{"name": "抱抱","items": ["꜀(˘꒳˘ ꜀)","(っ꒪ཀ꒪)っ","꜀(^. .^꜀  )꜆੭","─=≡Σ((( つ•̀ω•́)つ"]},{"name": "坏","items": ["(￢‿￢)","(→_→)","(◔_◔)","(˶ ¬  ¬˶)","(￢、￢)"]},{"name": "震惊","items": ["| ू•ૅω•́)ᵎᵎᵎ","| ू•ૅω•́)ﾉ","=͟͟͞͞ʕ ⸝⸝⸝⁰ ༝ ⁰ ʔ",".(꒪ȏ꒪)？","◔‸◔？","(⑉0-0⑉)","=͟͟͞͞(꒪⌓꒪*)","♡°͈▵°͈)","Σ(๑°꒳°๑)ᵎᵎᵎ","(°ー°〃)","(๑°⌓°๑)","(´⊙ω⊙`)","( ゜- ゜)つロ","(⊙o⊙)","◍⁰ᯅ⁰◍ .ᐟ.ᐟ","(ﾟДﾟ≡ﾟдﾟ)!?","{{(°△°; \"}}!","₍⸍•д•⸌₎","(′ʘ⌄ʘ‵)","( ˚ཫ˚ )","(◍꒪꒳꒪◍)՞","⁉️(◍ᴼ ▯ᵒ◍)","(ૈ  ᵒ̌▱๋ᵒ̌ )ૈ=͟͟͞͞ ⌨","⁽⁽◞(꒪ͦᴗ̵̍꒪ͦ=͟͟͞͞ ꒪ͦᴗ̵̍꒪ͦ)◟⁾⁾"]},{"name": "迷惑","items": ["(˘•ω•˘ )？","( ´◔ ‸◔')"]},{"name": "无奈","items": ["╮( •́ω•̀ )╭","(-ι_- )","(´-﹏-`；)"]},{"name": "尴尬","items": ["(•́ω•̀ ٥)","⦁֊⦁꧞","(´･ω･`)"]},{"name": "冷脸萌","items": ["(ㅍ_ㅍ)","(•̅灬•̅ )","(҂`･ｪ･´)","՞˶･֊･˶՞","(⩌⩊⩌)","(ᐡᯣ.ᯣกᐡ)","( ˶˙ ᴥ ˙ ˶)","՞⩌⌯⩌՞","ᗜ - ᗜ","=⩌⩊⩌=","( ᓀ◞ᓂ..)","Ծ‸Ծ","(ᯣ_ᯣ)","(눈_눈)"]},{"name": "亲亲","items": ["( ˘ ³˘)","(づ￣ ³￣)づ～","❤´ʚ｀","(๑˘ ³˘๑)♡","( ˘ ³˘)〜♡〜(˘ε˘ )","(⸝⸝> 3( / _ ᖛ )","(  ^   )ε・ )","(⸝⸝> ૩(>_<⸝⸝)","(ˆ⸝⸝> ꇴ <ˆ)ε <⸝⸝ˆ)",":(っ´ᾥ´)`ᾥ´c):","( ˘ ³˘))`꒳' 𓂂)"]},{"name": "捂脸","items": ["(っ´꒳´c)","(っ˘ω˘ς )"]},{"name": "害羞","items": ["꒰⌗´͈ ᵕ `͈⌗꒱৩","(ᐥᐜᐥ)♡︎ᐝ","₍ᐢ⸝⸝•ω•⸝⸝ᐢ₎","(՞,,⁃ ₃ ⁃,,՞)","すき (◍ˊ⩊ˋ◍)","(● ˘∇ ˘●)","(＊❛ω❛＊)","( ˶ᵔ ᗜ ᵔ˶ )","(•́⌄•́๑)૭✧","૮꒰ྀི⸝⸝ɞ̴̶̷ ·̫ ‹⸝⸝꒱ྀིა","(ꈍᴗꈍ","♪ *ꈍ﹃ꈍ)ﾉ","ʕ ⸝⸝⸝⁰⃚⃙̴ ༝ ⁰⃚⃙̴ ʔ","ʕ ⸝⸝⸝⁰ ༝ ⁰ ʔ","ʕ ⸝⸝⸝⁰ ༝ ⁰ ⸝⸝ʔ","(⸝⸝⸝ ╸▵╺⸝⸝⸝)⋆⁺₊⋆","૮(˶ᵔ ᵕ ᵔ˶)ა","( ´͈ ꒫ `͈ )◞","*͈ᴗ͈ˬᴗ͈ෆ⑅","(˶ᵔ ᵕ ᵔ˶)"]},{"name": "馋","items": ["～(￣▽￣～)","(っ˘﹃˘ς)","( ¯﹃¯ )♡","˶ˊᜊˋ˶","՞⸝⸝'ᜊ'⸝⸝՞","(⁎⁍̴̀﹃⁍̴́⁎)","(◍´△`◍)","(◍´O`◍)"]},{"name": "严肃","items": ["(⑉･̆-･̆⑉)"]},{"name": "伤心","items": ["(ˆт · тˆ)","(īī ^ īī)","( ˘̩̩ε˘̩ƪ)","(  ⩌⤚⩌ )","/ᐠ> ˕ <マ੭","(｡•́_ก̀｡)","(⸝⸝>﹏<⸝⸝)","(っ ̯ -｡)","ˆ𓂂ɞ̴̶̷ . ɞ̴̶̷𓂂 ྀིྀིྀིྀི","˃̣̣ᯅก","ᵕ᷄≀ ̠ᵕ᷅","‎꒰ᐢ ｡> ༝ ก ᐢ ꒱","˰̮⛻̴⃠︣⸝⸝̼⸝֪⛻̴⃠︣","(ᵒ̴̶̷̥́ _ ᵒ̴̶̷̣̥̀)","꧞ ༝ ꧞"]},{"name": "傲娇","items": ["o(´^｀)o"]},{"name": "失落","items": ["₍ᐢ๑ ̯๑ᐢ₎"]},{"name": "不高兴","items": ["๑'~'๑","(▼ヘ▼#)","(⇀‸↼‶)","(๑‾᷅^‾᷅๑)","(ㅎ‸ㅎ).ᐟ.ᐟ","⦕(>ロ<)⦖","૮₍。·᎔· 。₎ა","૮₍ - ⤙ - ₎ა","૮₍ ˃ ⤙ ˂ ₎ა.","(◦`~´◦)","(ྀི･̆༝･̆⌯)ྀི","-᷅ ⤙ -᷄","(๑`^´๑)"]},{"name": "卖萌","items": ["ᜊʕ ྀི . . . ྀིʔᜊ","- ̗̀ʚ ๑'~'๑ ɞ  ̖́-","˚₊*(ˊॢo̶̶̷̤ .̫ o̴̶̷̤ˋॢ)*₊˚","(◍`•ө•´◍)","(･∞･ﾐэ )Э",".+°⊹⁺˖໋̟⸝⸝  𑣧⃙̴ཻ̑꙯⃩⃔⃕͡᷍ ⸝⸝𑌻̢⸝̠⸝⃬⸝ 𑣧⃙̴ཻ̑꙯⃩⃔⃕͡᷍ ⸝⸝ ᘁᩚ ˖ᕀ⸜̑⸝͂˖⁺໋̟","ᜊ(♡ ¯꒳​¯ )ᜊ","ᜊ( ´꒳` )ᜊ","૮꒰ ˶• ༝ •˶꒱ა ♡","⊹⁺˖໋̟⸝⸝  𑣧⃙̴ཻ̑꙯⃩⃔⃕͡᷍ ⸝⸝𑌻̢⸝̠⸝⃬⸝ 𑣧⃙̴ཻ̑꙯⃩⃔⃕͡᷍ ⸝⸝ ᘁᩚ ˖ᕀ⸜̑⸝͂˖⁺໋̟⊹","⁺⊹ꉂ  ᳐˶ᵒ ᵕ ˂˶  ᳐ฅ໑ ₊˚","꒰ঌ⌯'ᵕ'⌯໒꒱","(。•̀ᴗ-)✧","₍՞˶⦁֊⦁˶՞₎੭ﾞ","𖦹‎´༥`𖦹‎."]},{"name": "猫咪","items": ["ꉂ ･ ･ ིྀฅ","ꉂ ᳐˶ᵒ ᵕ ˂˶ ᳐ฅ","ᓚᘏᗢ","(ᐡ⦁⩊⦁⸝⸝ᐡ )₊୭","^⌯𖥦⌯^ ੭","𑁊^.  ̫ .^𑁊","（𓐍ˊ꒳ˋ𓐍） ੭ﾞ","₍˄·͈༝·͈˄*₎◞ ̑̑","₍˄·͈༝·͈˄₎","≽^⦁𖥦⦁^ ≼🐾","^⌯𖥦⌯^ ྀི","^ ̳- ‧̫ • ̳^ฅ","^•𐃷•^ฅ","⦮_  ̫ _⦯","^_   ̫  _ ̥`","ฅ՞••՞ฅ"]},{"name": "睡觉","items": ["ʢᴗ.ᴗʡᶻ","(՞_  ̫ _՞)ᐝ","(´-ωก`)☡zᶻ","≡(　ε:)","ᶻz ₍^_   ̫ _^₎","^_   ̫  _ ̥`","ᯠ _   ̫  _ ᯄ ੭"]},{"name": "双人","items": ["(′。-ω(-ω-。`)","(ˆ꜆ .  ̫ . ).  ̫ . ꜀ˆ)","(/^-^(^ ^*)/","ɷ(   ᳐⊃⦁⩊⦁ )⦁⩊⦁ ⊂  ᳐ )","(ᐡ´• ·̫•)ﾉ(-‧̫ -`ᐡ)","( U - ·̫ - )ﾉ( •̥ ·̫ •̥Ｕ )","꒰ U - ·̫ - ꒱ﾉ꒰ •̥ ·̫ •̥Ｕ ꒱","( - ·̫ - )ﾉ( •̥ ·̫ •̥ )","( ᵕ ⸝⸝- · - )ﾉ( •̥ · •̥⸝⸝ ᵕ )♡","( U⩌⩊⩌)ﾉ( ᴛ ω ᴛＵ )","( Ｕ '-' )ノ('ᴗ' Ｕ)","( ू•ૅω•́)ﾉ(ᵒ̴̶̷̥́ _ ᵒ̴̶̷̣̥̀)","ʕ՞˶˃ ꇴ ˂˶ ྀིʔﾉ( ᵒ̴̶̷̥́ _ ᵒ̴̶̷̣̥̀ )","( ᵒ̴̶̷̥́ _ ᵒ̴̶̷̣̥̀ )꜆੭=͟͟͞͞  ԅ(՞˶˃ ꇴ ˂˶ ྀིԅ)","( ・▽・)>♡<( ・▽ ・ )","(ㆆ⩊ㆆ)♡ (⎚灬⎚)","(´･･)ﾉ(._.`)","(╯‵□′)╯︵ /(.□ . \\)","‎⊹ ｡*₍ᐢ .  ̫.ᐢ₎ ₍ᐢ. ̫ .⑅ᐢ₎⊹ ･｡",".°⑅ପ₍ᐢ｡•༝•｡ᐢ₎₍ᐢ｡•༝•｡ᐢ₎ଓ⑅°."]},{"name": "丑陋","items": ["༼´༎ຶ𓂏༎ຶ༽","（༎ຶ-༎ຶ）","ꈨຶꎁꈨຶ","(;´༎ຶД༎ຶ`)","༎ຶ‿༎ຶ","(;´༎ຶ༎ຶ`)","༼༎ຶ෴༎ຶ༽","（𓁹𓂏𓁹）","༼;´༎ຶ   ༎ຶ༽","༗.̫̮ ༗","𓃟❤︎","༼༎ຶ_༎ຶ༽ᕗ","（𓁹𓂏𓁹)","༼   ༎ຶ ෴ ༎ຶ༽","( ఠൠఠ )ﾉ","༼   ༎ຶ𓂏༎ຶ༽","༼ ༎ຶ ෴ ༎ຶ༽","༼    *꒪ั❥꒪ั*༽༽༾","(◉◞હ̱◟◉)༿"]}];
+
+let kmCategories = null;   // 当前库；null = 还没 load
+let kmActive = null;       // 选中的分类名；null = 全部
+let kmEditing = false;     // 编辑态（显示删除按钮）
+let kmTargetId = null;     // 要插入到哪个 textarea
+let kmCaret = null;        // 打开抽屉前记下的光标位置
+
+function kmLoad() {
+  // 存坏了不能把抽屉整个卡死——读不出来就退回自带库。
+  try {
+    const raw = localStorage.getItem(KM_STORAGE_KEY);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      if (Array.isArray(saved) && saved.length) {
+        kmCategories = saved.filter(c => c && typeof c.name === 'string' && Array.isArray(c.items));
+        if (kmCategories.length) return;
+      }
+    }
+  } catch (_) {}
+  kmCategories = JSON.parse(JSON.stringify(KM_BUNDLED));
+}
+
+function kmPersist() {
+  // localStorage 可能被禁用或写满，写不进去也只是下次回到自带库，不该报错打断使用。
+  try { localStorage.setItem(KM_STORAGE_KEY, JSON.stringify(kmCategories)); } catch (_) {}
+}
+
+function kmAdd(rawValue, categoryName) {
+  const value = (rawValue || '').trim();
+  if (!value) return;
+  const name = (categoryName || '').trim() || KM_MY_CATEGORY;
+  const idx = kmCategories.findIndex(c => c.name === name);
+  if (idx >= 0) {
+    if (kmCategories[idx].items.includes(value)) return;   // 已经有了就不重复加
+    kmCategories[idx].items.unshift(value);
+  } else {
+    kmCategories.unshift({ name: name, items: [value] });
+  }
+  kmPersist();
+  kmRender();
+}
+
+function kmDelete(value, categoryName) {
+  const idx = kmCategories.findIndex(c => c.name === categoryName);
+  if (idx < 0) return;
+  kmCategories[idx].items = kmCategories[idx].items.filter(v => v !== value);
+  if (!kmCategories[idx].items.length) {
+    kmCategories.splice(idx, 1);
+    if (kmActive === categoryName) kmActive = null;   // 选中的分类被删空了，退回「全部」
+  }
+  kmPersist();
+  kmRender();
+}
+
+function kmToggleEditing() {
+  kmEditing = !kmEditing;
+  document.getElementById('km-edit-btn').classList.toggle('active', kmEditing);
+  kmRender();
+}
+
+function kmSelectCategory(name) {
+  kmActive = name;
+  kmRender();
+  document.getElementById('km-body').scrollTop = 0;
+}
+
+// 点一下只把颜文字塞进光标处，不发送——原版 onSelect 的语义。
+function kmInsert(face) {
+  const el = kmTargetId && document.getElementById(kmTargetId);
+  closeKaomojiDrawer();
+  if (!el) return;
+  const start = kmCaret ? kmCaret.start : el.value.length;
+  const end = kmCaret ? kmCaret.end : el.value.length;
+  el.value = el.value.slice(0, start) + face + el.value.slice(end);
+  const pos = start + face.length;
+  kmCaret = { start: pos, end: pos };
+  el.focus();
+  try { el.setSelectionRange(pos, pos); } catch (_) {}
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function kmRender() {
+  if (!kmCategories) kmLoad();
+
+  const total = kmCategories.reduce((n, c) => n + c.items.length, 0);
+  document.getElementById('km-count').textContent = total + ' 个';
+
+  // 选中的分类可能已经被删掉了
+  if (kmActive !== null && !kmCategories.some(c => c.name === kmActive)) kmActive = null;
+
+  const tabs = document.getElementById('km-tabs');
+  tabs.textContent = '';
+  const mkTab = (label, name) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'km-tab' + (kmActive === name ? ' active' : '');
+    b.textContent = label;
+    b.onclick = () => kmSelectCategory(name);
+    return b;
+  };
+  tabs.appendChild(mkTab('全部', null));
+  kmCategories.forEach(c => tabs.appendChild(mkTab(c.name, c.name)));
+
+  const body = document.getElementById('km-body');
+  body.textContent = '';
+  const visible = kmActive === null ? kmCategories : kmCategories.filter(c => c.name === kmActive);
+
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'km-empty';
+    empty.textContent = '一个都不剩了';
+    body.appendChild(empty);
+  }
+
+  visible.forEach(cat => {
+    const head = document.createElement('div');
+    head.className = 'km-section-head';
+    const title = document.createElement('div');
+    title.textContent = cat.name;
+    const num = document.createElement('span');
+    num.textContent = cat.items.length;
+    head.appendChild(title);
+    head.appendChild(num);
+    body.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'km-grid';
+    cat.items.forEach(face => {
+      const cell = document.createElement('div');
+      cell.className = 'km-cell' + (kmEditing ? ' editing' : '');
+
+      // 颜文字里有 < > & \ 这些字符，只能走 textContent，不能拼 innerHTML
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'km-face';
+      btn.textContent = face;
+      btn.title = face;
+      if (kmEditing) {
+        btn.disabled = true;
+      } else {
+        btn.onclick = () => kmInsert(face);
+      }
+      cell.appendChild(btn);
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'km-del';
+      del.title = '删掉';
+      del.setAttribute('aria-label', '删掉这个颜文字');
+      del.textContent = '\u2212';
+      del.onclick = () => kmDelete(face, cat.name);
+      cell.appendChild(del);
+
+      grid.appendChild(cell);
+    });
+    body.appendChild(grid);
+  });
+
+  body.appendChild(kmAddPanel());
+}
+
+function kmAddPanel() {
+  const panel = document.createElement('div');
+  panel.className = 'km-add';
+
+  const head = document.createElement('div');
+  head.className = 'km-add-head';
+  const label = document.createElement('div');
+  label.textContent = '加一个自己的';
+  const sel = document.createElement('select');
+  sel.id = 'km-add-category';
+  const names = [KM_MY_CATEGORY].concat(kmCategories.map(c => c.name).filter(n => n !== KM_MY_CATEGORY));
+  names.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n;
+    o.textContent = n;
+    sel.appendChild(o);
+  });
+  head.appendChild(label);
+  head.appendChild(sel);
+
+  const row = document.createElement('div');
+  row.className = 'km-add-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'km-add-input';
+  input.placeholder = '粘贴或输入一个颜文字';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '+';
+  btn.title = '加进去';
+  btn.setAttribute('aria-label', '加进去');
+  btn.disabled = true;
+  const submit = () => {
+    if (!input.value.trim()) return;
+    kmAdd(input.value, sel.value);
+  };
+  input.oninput = () => { btn.disabled = !input.value.trim(); };
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+  btn.onclick = submit;
+  row.appendChild(input);
+  row.appendChild(btn);
+
+  panel.appendChild(head);
+  panel.appendChild(row);
+  return panel;
+}
+
+function openKaomojiDrawer(targetId) {
+  kmTargetId = targetId;
+  const el = document.getElementById(targetId);
+  // 抽屉一开焦点就离开 textarea，光标位置得先记下来，否则只能追加到末尾
+  kmCaret = el ? { start: el.selectionStart, end: el.selectionEnd } : null;
+  kmEditing = false;
+  document.getElementById('km-edit-btn').classList.remove('active');
+  kmRender();
+  document.getElementById('kaomoji-drawer').classList.add('show');
+}
+
+function closeKaomojiDrawer() {
+  document.getElementById('kaomoji-drawer').classList.remove('show');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('kaomoji-drawer').classList.contains('show')) {
+    closeKaomojiDrawer();
+  }
+});
 </script>
 
 </body>

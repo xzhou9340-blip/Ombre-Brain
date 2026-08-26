@@ -432,6 +432,8 @@ docker compose -f deploy/docker-compose.yml up -d
 
 **API Key 测试按钮**：填入 Gemini API Key 后点「测试」，立即验证 Key 是否有效，显示 ✓ 或具体错误原因，无需手写测试请求。
 
+**写信框的颜文字抽屉**：「信件 → 写一封」正文框下面有个脸的按钮，点开是横向分类的颜文字抽屉，自带 21 类共 204 个。点一下只插到光标处、**不发送**；也可以自己加、进编辑态删掉，存在浏览器本地（`localStorage`）。移植自 [KaomojiDrawerKit](https://github.com/Pyruslili/KaomojiDrawerKit)（MIT），原版是 SwiftUI 组件，这边重写成了纯 JS。
+
 ---
 
 ## 配置 / Configuration
@@ -586,3 +588,5 @@ docker compose -f deploy/docker-compose.yml up -d
 ## License
 
 MIT
+
+搬进来的第三方素材（目前只有颜文字抽屉用的 [KaomojiDrawerKit](https://github.com/Pyruslili/KaomojiDrawerKit)）各自的授权见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
