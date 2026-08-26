@@ -27,6 +27,9 @@
 
 ### 新增 / Added
 
+- **写信框加了颜文字抽屉**：Dashboard「信件 → 写一封」正文框下面多了个脸的按钮，点开是横向分类的颜文字抽屉——自带 21 类共 204 个，点一下只插到光标处**不发送**，可以自己加、进编辑态删掉，存在浏览器 `localStorage`（键名 `KaomojiDrawerKit.library.v1`）。移植自 [KaomojiDrawerKit](https://github.com/Pyruslili/KaomojiDrawerKit)（MIT, (c) 2026 Pyruslili）：那是个 iOS / macOS 的 SwiftUI 组件，仓库这边没有 Swift 侧，所以把它的数据、交互骨架和三个原创矢量图标搬过来，重写成纯 JS + HTML，`UserDefaults` 换成 `localStorage`，配色换成仪表板这套暖米灰。出处与授权见新增的 `THIRD_PARTY_NOTICES.md`。
+- 颜文字里带 `<` `>` `&`，渲染一律走 `textContent`，不拼 `innerHTML`；`tests/test_dashboard_kaomoji_drawer.py` 把这条、204/21 的数量、以及两份 dashboard.html 必须一致都钉住了。
+
 - **grow 兜底（任务书 §1.2）**：`digest()` / `analyze()` 挂掉时不再抛 `RuntimeError` 丢内容，降级为原文整存——不拆桶、打内部标签 `__undigested__`、桶名带「未拆桶」，接口恢复后可按标签捞回来重新 grow。实现在 `src/tools/grow/fallback.py`，`core.py`（长内容 digest）与 `shortpath.py`（短内容 analyze）两条分支都接上了（任务书只提了前者，后者有同一个洞）。
 - 降级路径全程不碰 LLM：不调 dehydrator、也不走 `merge_or_create`（后者会 search→可能把原文合并进别的桶，冲散内容、事后更难找），直接 `bucket_mgr.create` 落桶，元数据用固定默认值。原文超过单桶上限时按 UTF-8 字节机械切分成多条，不在多字节字符中间断开，一个字不丢。
 - 错误文案区分限流与配置问题：命中 `429` / `rate limit` / `quota` 等特征时明说「被限流，不是 key 没配」。旧文案一律写「API key 未配置」，2026-07-27 的实际故障是 429，属误导。
