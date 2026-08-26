@@ -1204,6 +1204,13 @@ if __name__ == "__main__":
                         await _reading_bridge.ensure_child_on_boot()
                     except Exception as _rb_exc:
                         logger.warning(f"reading child boot failed: {_rb_exc}")
+                    # ferrideo 观影后端：同形态的 node 子进程（127.0.0.1:18005 +
+                    # 持久盘子目录）。三个住户里最不重要的一个——起不来只降级。
+                    try:
+                        from web import ferrideo_bridge as _ferrideo_bridge
+                        await _ferrideo_bridge.ensure_child_on_boot()
+                    except Exception as _fb_exc:
+                        logger.warning(f"ferrideo child boot failed: {_fb_exc}")
                     # #4a ②：启动成功（app 已初始化、引擎已起、即将开始服务）→ 清零 entrypoint
                     # 的崩溃计数 .boot_fails。崩在这之前（import/init）= 启动失败，计数保留，
                     # 连续失败由 entrypoint 回滚到 _prev。只在「从持久卷 CODE_DIR 跑」时存在该文件。
@@ -1230,6 +1237,11 @@ if __name__ == "__main__":
                     try:
                         from web import reading_bridge as _reading_bridge
                         await _reading_bridge.stop_child()
+                    except Exception:
+                        pass
+                    try:
+                        from web import ferrideo_bridge as _ferrideo_bridge
+                        await _ferrideo_bridge.stop_child()
                     except Exception:
                         pass
                     _stop_tunnel()

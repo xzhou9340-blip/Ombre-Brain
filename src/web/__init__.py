@@ -32,6 +32,7 @@ from . import ollama_local
 from . import config_api
 from . import peek
 from . import reading_bridge
+from . import ferrideo_bridge
 from . import v3_debug
 
 
@@ -60,6 +61,9 @@ def register_all(mcp) -> None:
     # reading_bridge：/reading/<token>/* 反代到 read-along 子进程（共读阅读器 + API）。
     # 子进程本身在 server.py 的 lifespan 里拉起（ensure_child_on_boot）。
     reading_bridge.register(mcp)
+    # ferrideo_bridge：/ferrideo/<token>/* 反代到 ferrideo 子进程（观影播放器 + API）。
+    # 与 reading_bridge 同形态，子进程同样在 server.py 的 lifespan 里拉起。
+    ferrideo_bridge.register(mcp)
     # v3_debug：只读 Decision Ledger/Replay 路由。依赖 web/_shared.py 的
     # v3_runtime（src/ 树尚未接入，对应仓库根目录那套未上线的 v2.4.0
     # 接入层/ombrebrain 包）；在此之前所有请求降级返回 available:False，

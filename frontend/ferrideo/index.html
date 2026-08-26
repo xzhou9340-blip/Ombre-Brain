@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- ============================================================
+     ferrideo 播放器页面（M1 占位）
+
+     这个文件放在 frontend/ 下不是随手放的：entrypoint.sh 的热更新只把
+     src/ + frontend/ 播种到持久盘的 _app/，所以放这里的页面改完走一次
+     do-update 就生效，不用重建镜像。node 侧每次请求现读、不缓存。
+     ferrideo/ 里的服务端代码仍然走镜像重建。
+
+     页面里的 __FERRIDEO_BASE__ 由 node 在发送时替换成 <公网前缀>/<token>。
+     真正的播放器在 M3 替换掉本文件。
+     ============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ferrideo</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: #0B0B0D; color: #B8B2A6;
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  .box { max-width: 30em; padding: 2em; }
+  code { color: #F2EDE3; font-size: .9em; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <p>ferrideo 后端已就绪。</p>
+    <p>接口根地址 <code id="base"></code></p>
+    <p>播放器还没做（M1 只到服务起得来）。</p>
+  </div>
+  <script>
+    // 服务端注入：__FERRIDEO_BASE__ → <公网前缀>/<token>
+    const API_BASE = "__FERRIDEO_BASE__";
+    document.getElementById('base').textContent = API_BASE + '/api';
+  </script>
+</body>
+</html>

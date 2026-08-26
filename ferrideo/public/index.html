@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- ============================================================
+     镜像内置兜底页。正常情况下永远不会被看到——播放器在
+     frontend/ferrideo/index.html，node 的候选链会先找到它。
+     看到这一页说明候选链全落空了（热更新目录没播种成功、
+     或者 frontend/ferrideo/ 没进镜像），去看 ombre 日志里的 [ferrideo] 行。
+     ============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ferrideo</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: #0B0B0D; color: #B8B2A6;
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  .box { max-width: 30em; padding: 2em; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <p>ferrideo 后端在跑，但播放器页面没找到。</p>
+    <p>页面应该在 <code>frontend/ferrideo/index.html</code>。去看 ombre 日志里的 <code>[ferrideo]</code> 行。</p>
+  </div>
+</body>
+</html>
