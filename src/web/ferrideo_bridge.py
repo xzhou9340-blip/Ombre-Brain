@@ -32,11 +32,12 @@ Render 服务里，共用同一持久盘。形状与 web/reading_bridge.py 完�
 - 不碰记忆桶
 
 对外暴露：register(mcp) / ensure_child_on_boot() / stop_child() /
-         web_token() / internal_base() / data_dir() / status()
+         web_token() / internal_gate_base() / data_dir() / drain_rescues() / status()
 ========================================
 """
 
 import os
+import json
 import asyncio
 import logging
 import secrets
@@ -53,7 +54,10 @@ logger = logging.getLogger("ombre_brain")
 # ============================================================
 # 调参面板
 # ============================================================
-_DEFAULT_INTERNAL_PORT = 18005      # 子进程监听端口（127.0.0.1）；18004 是 read-along
+_DEFAULT_INTERNAL_PORT = 18005      # 播放器端口（127.0.0.1）；18004 是 read-along
+_DEFAULT_GATE_PORT = 18006          # AI 门禁端口；只挂 gate 路由，**不经过反向代理**
+_RESCUE_FILE = "rescued.jsonl"      # 子进程淘汰房间前抢救出来的摘录/笔记
+_RESCUE_DRAIN_SECONDS = 60.0        # 排空检查间隔（监控循环里顺带做）
 _PUBLIC_PREFIX = "/ferrideo"        # 对外路径前缀：/ferrideo/<token>/...
 _TOKEN_BYTES = 16                   # 自动生成 token 的熵（token_urlsafe → ~22 字符）
 _BACKOFF_START_SECONDS = 1.0        # 崩溃重启退避起点
@@ -203,9 +207,25 @@ def web_token() -> str:
     return token
 
 
-def internal_base() -> str:
-    """MCP 工具用的内部地址：http://127.0.0.1:<port>/<token>（进程内环回）。"""
-    return f"http://127.0.0.1:{_internal_port()}/{web_token()}"
+def _gate_port() -> int:
+    try:
+        return int(os.environ.get("FERRIDEO_GATE_PORT") or _DEFAULT_GATE_PORT)
+    except (TypeError, ValueError):
+        return _DEFAULT_GATE_PORT
+
+
+def internal_gate_base() -> str:
+    """MCP 工具唯一的后端地址：门禁端口上的 /api/gate 前缀。
+
+    **注意这里指的是 gate 端口，不是播放器端口。** 防剧透门禁不是靠
+    「python 侧不去调 /api/rooms/:id/subtitle」这个约定成立的——那种约定
+    会在某个赶时间的深夜被绕过去。子进程把 gate 单独跑在一个 app 上，
+    播放器的路由压根不注册在那个端口，所以 MCP 侧就算把路径拼成
+    ../rooms/xxx/subtitle 也够不到。结构上做不到，不是自觉。
+
+    这个端口不经过 /ferrideo 反向代理，公网不可达。
+    """
+    return f"http://127.0.0.1:{_gate_port()}/{web_token()}/api/gate"
 
 
 def _child_env() -> dict:
@@ -217,11 +237,107 @@ def _child_env() -> dict:
     env = dict(os.environ)
     env.pop("PORT", None)
     env["FERRIDEO_PORT"] = str(_internal_port())
+    env["FERRIDEO_GATE_PORT"] = str(_gate_port())
     env["DATA_DIR"] = data_dir()
     env["FERRIDEO_WEB_TOKEN"] = web_token()
     env["FERRIDEO_PUBLIC_PREFIX"] = _PUBLIC_PREFIX
     env["FERRIDEO_PAGE_DIRS"] = ":".join(_page_dirs())
     return env
+
+
+# ============================================================
+# 抢救排空：rescued.jsonl → letter 降级通道
+# ============================================================
+# 子进程在淘汰一个「已散场、还没出票根、但有摘录/笔记」的房间之前，
+# 会先把那些内容 append+fsync 进 <DATA_DIR>/rescued.jsonl，写不成就不淘汰。
+# 这里负责把它排空成一封 letter——那是她在电影里挑出来的句子，
+# 不能因为一天看了六部片子就无声无息没了。降级可以，丢失不行。
+
+
+def _rescue_path() -> str:
+    return os.path.join(data_dir(), _RESCUE_FILE)
+
+
+def _format_rescue(rec: dict) -> str:
+    """把一条抢救记录写成人能读的信。"""
+    def _hms(ms) -> str:
+        total = max(0, int((ms or 0) // 1000))
+        return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+    lines = [
+        f"《{rec.get('title') or '未命名'}》这一场没有生成票根，房间被回收了。",
+        "以下是当时留下的东西，先存在这里，等你把它补成一条记忆。",
+        "",
+    ]
+    quotes = rec.get("quotes") or []
+    notes = rec.get("notes") or []
+    if quotes:
+        lines.append("她记下的台词：")
+        lines += [f"· [{_hms(q.get('positionMs'))}] {q.get('text', '')}" for q in quotes]
+        lines.append("")
+    if notes:
+        lines.append("看的时候写的笔记：")
+        lines += [f"· [{_hms(n.get('positionMs'))}] {n.get('text', '')}" for n in notes]
+        lines.append("")
+    lines.append(f"（房间 {rec.get('roomId')}，散场于 {rec.get('finishedAt') or '未知'}）")
+    return "\n".join(lines)
+
+
+async def drain_rescues() -> int:
+    """把 rescued.jsonl 排空成 letter。返回成功写入的条数。
+
+    先 rename 再处理：排空过程中子进程还能继续往新文件里追加，不会打架。
+    单条写失败就把它追加回去，下一轮再试——绝不因为一条失败丢掉其余的。
+    """
+    src = _rescue_path()
+    if not os.path.isfile(src) or os.path.getsize(src) == 0:
+        return 0
+    staging = f"{src}.draining"
+    try:
+        os.replace(src, staging)
+    except OSError as e:
+        logger.warning("[ferrideo] 抢救文件改名失败：%s", e)
+        return 0
+
+    try:
+        with open(staging, "r", encoding="utf-8") as f:
+            raw_lines = [ln for ln in f.read().splitlines() if ln.strip()]
+    except OSError as e:
+        logger.warning("[ferrideo] 抢救文件读不了：%s", e)
+        return 0
+
+    from tools.plan import core as _t_plan
+    written, leftover = 0, []
+    for ln in raw_lines:
+        try:
+            rec = json.loads(ln)
+        except (ValueError, TypeError):
+            logger.warning("[ferrideo] 抢救记录解析不了，丢弃这一行：%.80s", ln)
+            continue        # 坏行没有重试价值，扔掉但要留痕
+        try:
+            await _t_plan.letter_write(
+                author="ai",
+                content=_format_rescue(rec),
+                title=f"未成票根：{rec.get('title') or '未命名'}",
+            )
+            written += 1
+        except Exception as e:  # noqa: BLE001 — 写不进去就留着下轮重试
+            logger.warning("[ferrideo] 抢救记录写 letter 失败，留到下一轮：%s", e)
+            leftover.append(ln)
+
+    if leftover:
+        try:
+            with open(src, "a", encoding="utf-8") as f:
+                f.write("\n".join(leftover) + "\n")
+        except OSError as e:
+            logger.error("[ferrideo] 抢救记录回写失败，这些内容有丢失风险：%s", e)
+    try:
+        os.remove(staging)
+    except OSError:
+        pass
+    if written:
+        logger.info("[ferrideo] 已把 %d 条被回收房间的摘录/笔记存进 letter", written)
+    return written
 
 
 # ============================================================
@@ -263,10 +379,18 @@ def _spawn() -> "subprocess.Popen | None":
 
 
 async def _monitor() -> None:
-    """监控循环：子进程退出 → 指数退避重启；稳定运行 60s 后退避复位。"""
+    """监控循环：子进程退出 → 指数退避重启；稳定运行 60s 后退避复位。
+    顺带每分钟排空一次抢救文件（被回收房间的摘录/笔记 → letter）。"""
     global _child_proc, _child_started_at
     backoff = _BACKOFF_START_SECONDS
+    last_drain = 0.0
     while _managed:
+        if time.monotonic() - last_drain >= _RESCUE_DRAIN_SECONDS:
+            last_drain = time.monotonic()
+            try:
+                await drain_rescues()
+            except Exception as e:  # noqa: BLE001 — 排空失败不影响子进程托管
+                logger.warning("[ferrideo] 排空抢救文件出错：%s", e)
         proc = _child_proc
         if proc is not None and proc.poll() is None:
             if backoff > _BACKOFF_START_SECONDS and time.monotonic() - _child_started_at >= _STABLE_RESET_SECONDS:

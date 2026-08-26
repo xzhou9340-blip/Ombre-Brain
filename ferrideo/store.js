@@ -53,6 +53,7 @@ const FINISHED_GRACE_MS = 60 * 60 * 1000;        // 已结束的房间留多久�
 const DISK_QUOTA_BYTES = 100 * 1024 * 1024;      // ferrideo 目录总配额
 const MIN_FREE_BYTES = 200 * 1024 * 1024;        // 整盘剩余低于此值：硬停写帧
 const FREE_SPACE_CACHE_MS = 10 * 1000;           // 剩余空间查询结果缓存
+const RESCUE_FILE = 'rescued.jsonl';             // 淘汰前抢救出来的摘录/笔记，等 python 侧排空成 letter
 
 // ============================================================
 // 模块状态
@@ -321,6 +322,44 @@ function enforceQuota() {
 // 对外操作
 // ============================================================
 /**
+ * 抢救：把一个即将被淘汰、又没出票根的房间的摘录/笔记，
+ * 追加写进 <DATA_DIR>/rescued.jsonl，等 python 侧排空成一封 letter。
+ *
+ * 为什么不是 node 直接写记忆库：那是 ombre 的东西，node 不该伸手进去。
+ * 为什么一定要落盘再删：降级可以，丢失不行（v2.1 §3.3 同一条原则）。
+ * 返回 false 表示没写成——调用方必须因此放弃淘汰。
+ */
+function rescue(room) {
+  const rec = {
+    kind: 'ferrideo_room_evicted',
+    roomId: room.id,
+    title: room.title,
+    createdAt: room.createdAt,
+    finishedAt: room.finishedAt,
+    watchedMs: room.watchedMs,
+    quotes: room.quotes.map((q) => ({ text: q.text, positionMs: q.positionMs })),
+    notes: room.notes.map((n) => ({ text: n.text, positionMs: n.positionMs, source: n.source })),
+    rescuedAt: nowIso(),
+  };
+  try {
+    const line = `${JSON.stringify(rec)}\n`;
+    const fd = fs.openSync(path.join(dataDir, RESCUE_FILE), 'a');
+    try {
+      fs.writeFileSync(fd, line);
+      fs.fsyncSync(fd);           // 抢救数据必须真落盘，再让调用方去删房间
+    } finally {
+      fs.closeSync(fd);
+    }
+    warn(`房间 ${room.id}「${room.title}」没出票根就要被淘汰，` +
+         `${rec.quotes.length} 条摘录 / ${rec.notes.length} 条笔记已写入 ${RESCUE_FILE}，等排空成 letter`);
+    return true;
+  } catch (e) {
+    error(`抢救写盘失败 ${room.id}：${e.message}`);
+    return false;
+  }
+}
+
+/**
  * 名额满了先腾一个：只挤「已经散场的」房间，优先挤票根已生成的，
  * 其次挤散场超过一小时的。
  *
@@ -336,6 +375,15 @@ function evictOneFinished() {
   const victim = finished.find((r) => r.ticket)
     || finished.find((r) => now - new Date(r.finishedAt).getTime() > FINISHED_GRACE_MS);
   if (!victim) return false;
+  // 没出票根、但有摘录或笔记的房间：那些是她在电影里挑出来的句子。
+  // 先抢救进降级通道（python 侧排空成 letter），写不进去就**不删**——
+  // 宁可这次建房失败，也不能无声无息丢掉。
+  if (!victim.ticket && (victim.quotes.length || victim.notes.length)) {
+    if (!rescue(victim)) {
+      warn(`房间 ${victim.id} 有摘录/笔记但抢救失败，不淘汰它（宁可建房失败）`);
+      return false;
+    }
+  }
   rooms.delete(victim.id);
   dirty.delete(victim.id);
   dropRoomFiles(victim.id);
@@ -588,6 +636,24 @@ function setTicket(room, ticket) {
   return ticket;
 }
 
+/**
+ * 没有房间时的失败上报（R1：选片预检失败往往发生在建房之前）。
+ * 只进日志和一个有界的内存列表——重点是**你能在 ombre 日志里看到她卡在哪**，
+ * 不用她自己描述「就是打不开」。
+ */
+const orphanFailures = [];
+const MAX_ORPHAN_FAILURES = 50;
+
+function reportOrphanFailure({ scope = 'playback', kind, detail }) {
+  const rec = {
+    scope, kind: clampText(kind, 40) || 'unknown', detail: clampText(detail, 500), at: nowIso(),
+  };
+  orphanFailures.push(rec);
+  if (orphanFailures.length > MAX_ORPHAN_FAILURES) orphanFailures.shift();
+  warn(`播放器上报失败（还没建房）：${rec.scope} ${rec.kind} ${rec.detail}`);
+  return rec;
+}
+
 function stats() {
   return {
     rooms: rooms.size,
@@ -602,7 +668,8 @@ module.exports = {
   init, stop, flushSnapshots, cleanup, enforceQuota,
   createRoom, getRoom, listRooms,
   heartbeat, setSubtitle, addDanmaku, addQuote, addNote,
-  requestFrame, saveFrame, readFrame, reportFailure, finish, setTicket, evictOneFinished,
+  requestFrame, saveFrame, readFrame, reportFailure, reportOrphanFailure,
+  finish, setTicket, evictOneFinished, rescue,
   stats,
   // 给测试和路由用的常量/内部件
   _internals: {
@@ -610,6 +677,6 @@ module.exports = {
     MAX_ROOMS, MAX_CUES, MAX_DANMAKU, MAX_FRAMES_PER_ROOM, MAX_FRAME_BYTES,
     MAX_DANMAKU_ATTEMPTS, MAX_DANMAKU_TEXT, ROOM_TTL_MS, FINISHED_GRACE_MS,
     DISK_QUOTA_BYTES, MIN_FREE_BYTES,
-    frameDir, snapshotPath,
+    frameDir, snapshotPath, RESCUE_FILE,
   },
 };

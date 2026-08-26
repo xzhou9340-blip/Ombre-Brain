@@ -32,11 +32,13 @@ const path = require('path');
 
 const store = require('./store');
 const routes = require('./routes');
+const gate = require('./gate');
 
 // ============================================================
 // 调参面板
 // ============================================================
-const DEFAULT_INTERNAL_PORT = 18005;      // 内部端口（read-along 占了 18004）
+const DEFAULT_INTERNAL_PORT = 18005;      // 播放器端口（read-along 占了 18004）
+const DEFAULT_GATE_PORT = 18006;          // AI 门禁端口（只挂 gate 路由，不公网暴露）
 const TOKEN_RE = /^[\w-]+$/;              // URL 安全字符，与 bridge 侧一致
 const PAGE_PLACEHOLDER = '__FERRIDEO_BASE__';  // 页面里被替换成 <前缀>/<token>
 const JSON_BODY_LIMIT = '1mb';            // 帧不走 JSON（走 raw），这里不需要放大
@@ -152,16 +154,29 @@ function main() {
   const host = Number.isInteger(envPort) ? '0.0.0.0' : '127.0.0.1';
 
   const server = app.listen(port, host, () => {
-    console.log(`[ferrideo] 已启动 http://${host}:${port}  data=${DATA_DIR}  页面候选=${pageDirs().join('、')}`);
+    console.log(`[ferrideo] 播放器已启动 http://${host}:${port}  data=${DATA_DIR}  页面候选=${pageDirs().join('、')}`);
   });
   server.on('error', (e) => {
     console.error(`[ferrideo] 监听 ${host}:${port} 失败: ${e.message}`);
+    process.exit(1);
+  });
+
+  // AI 门禁：**永远只绑 127.0.0.1**，不跟播放器共用 app、不经过 ombre 的
+  // /ferrideo 反向代理。防剧透是靠「那个端口上没有播放器的路由」成立的，
+  // 不是靠调用方自觉——所以这里即便在独立部署（有 PORT）时也不对外绑。
+  const gatePort = parseInt(process.env.FERRIDEO_GATE_PORT || '', 10) || DEFAULT_GATE_PORT;
+  const gateServer = gate.createGateApp({ token: TOKEN }).listen(gatePort, '127.0.0.1', () => {
+    console.log(`[ferrideo] 门禁已启动 http://127.0.0.1:${gatePort}（只有 gate 路由，公网不可达）`);
+  });
+  gateServer.on('error', (e) => {
+    console.error(`[ferrideo] 门禁监听 127.0.0.1:${gatePort} 失败: ${e.message}`);
     process.exit(1);
   });
   // 被 bridge terminate 时干净退出（不留孤儿端口）
   for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, () => {
       store.stop();          // 退出前把待写的快照落盘
+      gateServer.close();
       server.close(() => process.exit(0));
     });
   }

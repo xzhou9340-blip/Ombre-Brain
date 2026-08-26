@@ -1,42 +1,860 @@
 <!doctype html>
 <!-- ============================================================
-     ferrideo 播放器页面（M1 占位）
+     ferrideo 播放器
+     ============================================================
 
-     这个文件放在 frontend/ 下不是随手放的：entrypoint.sh 的热更新只把
-     src/ + frontend/ 播种到持久盘的 _app/，所以放这里的页面改完走一次
-     do-update 就生效，不用重建镜像。node 侧每次请求现读、不缓存。
-     ferrideo/ 里的服务端代码仍然走镜像重建。
+     使用环境只有一个：一个人，晚上，关着灯，横着拿 iPad。所有决定从这一条推导。
+     - 控件默认不存在，播放时 3 秒无操作只剩画面
+     - 整个界面都在退让，唯一会亮起来的是弹幕——因为那是另一个人在说话
+     - 视频只存在于这台设备上：createObjectURL，不上传、不缓存、退出即 revoke
 
-     页面里的 __FERRIDEO_BASE__ 由 node 在发送时替换成 <公网前缀>/<token>。
-     真正的播放器在 M3 替换掉本文件。
+     这个文件在 frontend/ 下，跟着 ombre 的 src/+frontend/ 热更新走：
+     改完 do-update，iPad 刷新页面即生效，不用重建镜像。node 侧每次请求现读、
+     发送时把 __FERRIDEO_BASE__ 替换成 <公网前缀>/<token>。
      ============================================================ -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0B0B0D">
 <title>ferrideo</title>
 <style>
-  :root { color-scheme: dark; }
-  body {
-    margin: 0; min-height: 100vh;
-    display: flex; align-items: center; justify-content: center;
-    background: #0B0B0D; color: #B8B2A6;
-    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  /* ---- 底色与字 ------------------------------------------------------
+     近黑而不是纯黑：纯黑在 OLED 上跟画面黑边分不开。
+     文字低亮度暖灰，不用纯白——晚上刺眼。 */
+  :root {
+    --bg: #0B0B0D;
+    --ink: #B8B2A6;
+    --ink-dim: #6E6A62;
+    --line: #232226;
+    --danmaku: #F2EDE3;      /* 全页最亮的东西，只有这一个 */
+    --sub: #E8E2D6;
+    --ok: #6E8F6B;
+    --warn: #B8944F;
+    --bad: #A5564C;
+    --radius: 10px;
+    color-scheme: dark;
   }
-  .box { max-width: 30em; padding: 2em; }
-  code { color: #F2EDE3; font-size: .9em; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    overscroll-behavior: none;
+  }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .serif { font-family: Georgia, "Songti SC", "Times New Roman", serif; }
+
+  section { display: none; }
+  section.on { display: block; }
+
+  /* ---- 设置 / 大厅 ---------------------------------------------------- */
+  .page { max-width: 34em; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+  h1 { font-size: 1.1rem; font-weight: 500; letter-spacing: .08em; margin: 0 0 2rem; color: var(--ink-dim); }
+  .field { margin-bottom: 1.25rem; }
+  label { display: block; font-size: .8rem; color: var(--ink-dim); margin-bottom: .4rem; }
+  input[type=text], input[type=url] {
+    width: 100%; padding: .7rem .8rem; font-size: 1rem; font-family: inherit;
+    background: #131317; color: var(--ink); border: 1px solid var(--line);
+    border-radius: var(--radius); outline: none;
+  }
+  input:focus { border-color: #3A3841; }
+  input.room { text-transform: uppercase; letter-spacing: .3em; font-size: 1.3rem; text-align: center; }
+  button {
+    font: inherit; color: var(--ink); background: #17171C; border: 1px solid var(--line);
+    border-radius: var(--radius); padding: .7rem 1.1rem; cursor: pointer;
+  }
+  button:active { background: #1F1F26; }
+  button[disabled] { opacity: .4; cursor: default; }
+  button.primary { background: #23222A; }
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .hint { font-size: .8rem; color: var(--ink-dim); margin-top: .4rem; }
+  .hint.bad { color: var(--bad); }
+  .sep { height: 1px; background: var(--line); margin: 2rem 0; border: 0; }
+  .file-btn { display: inline-block; }
+  .file-btn input { display: none; }
+  .picked { font-size: .8rem; color: var(--ink-dim); margin-top: .4rem; word-break: break-all; }
+
+  /* ---- 放映 ----------------------------------------------------------- */
+  #screen { position: fixed; inset: 0; background: #000; display: none; }
+  #screen.on { display: block; }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+
+  /* 弹幕层：唯一亮的东西 */
+  #danmakuLayer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .danmaku {
+    position: absolute; left: 100%; white-space: nowrap;
+    font-family: Georgia, "Songti SC", serif; font-size: clamp(18px, 2.6vh, 30px);
+    color: var(--danmaku); text-shadow: 0 1px 3px rgba(0,0,0,.9);
+    will-change: transform;
+  }
+  .danmaku .who { font-size: .72em; color: #C9C2B4; margin-right: .5em; }
+  @media (prefers-reduced-motion: reduce) {
+    .danmaku { left: auto; right: 4vw; transition: opacity .4s; }
+  }
+
+  /* 字幕 */
+  #subtitle {
+    position: absolute; left: 0; right: 0; bottom: 8%; text-align: center;
+    font-size: clamp(17px, 2.4vh, 28px); color: var(--sub);
+    text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 6%; pointer-events: none;
+    white-space: pre-wrap;
+  }
+  /* 对轴时画面中央那一句 */
+  #alignPeek {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    font-size: clamp(18px, 2.6vh, 30px); color: var(--danmaku); text-align: center;
+    text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 8%; pointer-events: none;
+    opacity: 0; transition: opacity .2s;
+  }
+  #alignPeek.on { opacity: 1; }
+
+  /* 控件条：默认不存在 */
+  #controls {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 1rem 1.2rem calc(1rem + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,.75), rgba(0,0,0,0));
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  #controls.on { opacity: 1; pointer-events: auto; }
+  #controls .row { gap: .8rem; }
+  #seek { flex: 1; -webkit-appearance: none; appearance: none; height: 2px; background: #4A4750; border-radius: 2px; }
+  #seek::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); }
+  #clock { font-variant-numeric: tabular-nums; font-size: .85rem; color: var(--ink); min-width: 10.5em; text-align: right; }
+  .ctl { padding: .5rem .8rem; font-size: .85rem; background: rgba(20,20,24,.7); }
+  #offsetBox { font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--ink-dim); min-width: 4em; text-align: center; }
+
+  /* 右下角连接点 */
+  #dot { position: absolute; right: 10px; bottom: 10px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); opacity: .55; }
+  #dot.warn { background: var(--warn); } #dot.bad { background: var(--bad); opacity: .9; }
+
+  /* 极轻的角落提示，不弹窗、不挡画面 */
+  #toast {
+    position: absolute; left: 50%; top: 6%; transform: translateX(-50%);
+    font-size: .85rem; color: var(--ink); background: rgba(15,15,18,.85);
+    border-radius: var(--radius); padding: .5rem .9rem; opacity: 0; transition: opacity .3s;
+    pointer-events: none; max-width: 80%; text-align: center;
+  }
+  #toast.on { opacity: 1; }
 </style>
 </head>
 <body>
-  <div class="box">
-    <p>ferrideo 后端已就绪。</p>
-    <p>接口根地址 <code id="base"></code></p>
-    <p>播放器还没做（M1 只到服务起得来）。</p>
+
+<!-- ============================ A. 设置 ============================ -->
+<section id="setup" class="on"><div class="page">
+  <h1>ferrideo · 设置</h1>
+  <div class="field">
+    <label>你的昵称</label>
+    <input type="text" id="nick" placeholder="她">
   </div>
-  <script>
-    // 服务端注入：__FERRIDEO_BASE__ → <公网前缀>/<token>
-    const API_BASE = "__FERRIDEO_BASE__";
-    document.getElementById('base').textContent = API_BASE + '/api';
-  </script>
+  <div class="field">
+    <label>AI 的名字</label>
+    <input type="text" id="aiName" placeholder="克">
+  </div>
+  <div class="field">
+    <label>后端地址（一般不用改）</label>
+    <input type="url" id="apiBase" placeholder="留空＝当前地址">
+    <div class="hint">页面从哪儿打开就连哪儿，通常留空即可。</div>
+  </div>
+  <div class="row">
+    <button class="primary" id="setupDone">好了</button>
+    <button id="wake">唤醒后端</button>
+    <span class="hint" id="wakeHint"></span>
+  </div>
+  <hr class="sep">
+  <div class="hint">
+    视频不会被上传，也不会离开这台设备。ferrideo 不提供任何影视资源。
+  </div>
+</div></section>
+
+<!-- ============================ B. 大厅 ============================ -->
+<section id="lobby"><div class="page">
+  <h1>今晚看什么</h1>
+
+  <div class="field">
+    <label>片名（新建房间）</label>
+    <input type="text" id="title" placeholder="花样年华">
+  </div>
+  <div class="field">
+    <label>或者，加入已有房间</label>
+    <input type="text" id="joinId" class="room" maxlength="6" placeholder="······">
+    <div class="hint" id="joinHint"></div>
+  </div>
+
+  <hr class="sep">
+
+  <div class="field">
+    <label>影片</label>
+    <div class="row">
+      <label class="file-btn"><button type="button" onclick="this.parentNode.querySelector('input').click()">选择影片</button><input type="file" id="videoFile" accept="video/*"></label>
+      <span class="hint" id="videoState"></span>
+    </div>
+    <div class="picked" id="videoPicked"></div>
+    <div class="hint bad" id="videoErr"></div>
+  </div>
+
+  <div class="field">
+    <label>字幕（可选）</label>
+    <div class="row">
+      <label class="file-btn"><button type="button" onclick="this.parentNode.querySelector('input').click()">选择字幕</button><input type="file" id="subFile" accept=".srt,.vtt,text/plain"></label>
+      <span class="hint" id="subState"></span>
+    </div>
+    <div class="picked" id="subPicked"></div>
+  </div>
+
+  <div class="row" style="margin-top:2rem">
+    <button class="primary" id="start" disabled>开始</button>
+    <span class="hint" id="startHint"></span>
+  </div>
+  <div class="row" style="margin-top:2rem">
+    <button id="toSetup">设置</button>
+  </div>
+</div></section>
+
+<!-- ============================ C. 放映 ============================ -->
+<div id="screen">
+  <video id="video" playsinline webkit-playsinline preload="metadata"></video>
+  <div id="danmakuLayer"></div>
+  <div id="subtitle"></div>
+  <div id="alignPeek"></div>
+  <div id="toast"></div>
+  <div id="dot"></div>
+  <div id="controls">
+    <div class="row">
+      <button class="ctl" id="playPause">▶︎</button>
+      <input type="range" id="seek" min="0" max="1000" value="0">
+      <span id="clock">00:00:00 / 00:00:00</span>
+    </div>
+    <div class="row" style="margin-top:.7rem">
+      <button class="ctl" id="quote">记下这句</button>
+      <button class="ctl" id="sayBtn">说一句</button>
+      <span style="flex:1"></span>
+      <button class="ctl" id="offMinus">−0.5s</button>
+      <span id="offsetBox">±0.0s</span>
+      <button class="ctl" id="offPlus">+0.5s</button>
+      <span style="flex:1"></span>
+      <button class="ctl" id="exit">退出</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ============================================================
+ * 配置与状态
+ * ============================================================ */
+// 服务端注入：__FERRIDEO_BASE__ → <公网前缀>/<token>。
+// token 在路径里，所以前端不需要也不该保存任何密钥。
+const INJECTED_BASE = "__FERRIDEO_BASE__";
+const LS = 'ferrideo:';
+const HEARTBEAT_MS = 3000;
+const CUE_TICK_MS = 250;
+const CONTROLS_HIDE_MS = 3000;
+const DANMAKU_TRACKS = 6;
+const DANMAKU_TRAVEL_MS = 8000;
+const TRACK_COOLDOWN_MS = 2000;
+const PRECHECK_TIMEOUT_MS = 3000;
+const BLACK_SAMPLES = 100;
+const BLACK_SUM = 30;             // R+G+B 低于这个值算黑点
+
+const S = {
+  roomId: null, title: '', videoFile: null, videoUrl: null,
+  cues: [], cueIndex: -1, offsetMs: 0,
+  pendingAcks: [], lastBeatOk: 0, beating: null, cueTimer: null,
+  consecutiveBlack: 0, frameDead: false, wakeLock: null, orphanFailures: [],
+};
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get: (k, d = '') => { try { return localStorage.getItem(LS + k) ?? d; } catch { return d; } },
+  set: (k, v) => { try { localStorage.setItem(LS + k, v); } catch { /* 无痕模式，忽略 */ } },
+};
+
+function apiRoot() {
+  const custom = store.get('apiBase').trim();
+  return (custom || INJECTED_BASE).replace(/\/+$/, '');
+}
+function api(path) { return apiRoot() + '/api' + path; }
+
+async function call(path, { method = 'GET', body, raw, type } = {}) {
+  const opt = { method, headers: {} };
+  if (raw) { opt.body = raw; opt.headers['Content-Type'] = type || 'application/octet-stream'; }
+  else if (body !== undefined) { opt.body = JSON.stringify(body); opt.headers['Content-Type'] = 'application/json'; }
+  const res = await fetch(api(path), opt);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!res.ok) {
+    const err = new Error((data && data.error) || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+function hms(ms) {
+  const t = Math.max(0, Math.floor((ms || 0) / 1000));
+  return [t / 3600, (t % 3600) / 60, t % 60].map((n) => String(Math.floor(n)).padStart(2, '0')).join(':');
+}
+function mb(bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; }
+
+function show(which) {
+  for (const id of ['setup', 'lobby']) $(id).classList.toggle('on', id === which);
+  $('screen').classList.toggle('on', which === 'screen');
+}
+
+function toast(msg, ms = 1600) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('on');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('on'), ms);
+}
+
+/* ============================================================
+ * 失败上报：走后端，不走 console
+ * 这样卡住的时候不用她自己描述「就是打不开」
+ * ============================================================ */
+async function reportFailure(scope, kind, detail) {
+  const payload = { scope, kind, detail: String(detail || '').slice(0, 500) };
+  try {
+    if (S.roomId) await call(`/rooms/${S.roomId}/failure`, { method: 'POST', body: payload });
+    else await call('/failures', { method: 'POST', body: payload });
+  } catch {
+    S.orphanFailures.push(payload);   // 后端也连不上，等下次有机会再说
+  }
+}
+
+/* ============================================================
+ * 设置
+ * ============================================================ */
+function loadSettings() {
+  $('nick').value = store.get('nick', '');
+  $('aiName').value = store.get('aiName', '克');
+  $('apiBase').value = store.get('apiBase', '');
+}
+$('setupDone').onclick = () => {
+  store.set('nick', $('nick').value.trim());
+  store.set('aiName', $('aiName').value.trim() || '克');
+  store.set('apiBase', $('apiBase').value.trim());
+  store.set('setupDone', '1');
+  show('lobby');
+};
+$('toSetup').onclick = () => show('setup');
+
+// 冷启动 30-60 秒，别让人对着白屏等
+$('wake').onclick = async () => {
+  const hint = $('wakeHint');
+  const t0 = Date.now();
+  hint.textContent = '正在叫醒…';
+  const tick = setInterval(() => { hint.textContent = `正在叫醒… ${Math.round((Date.now() - t0) / 1000)}s`; }, 1000);
+  try {
+    const res = await fetch(apiRoot().replace(/\/[^/]+$/, '') + '/healthz', { cache: 'no-store' });
+    hint.textContent = res.ok ? `醒了（${Math.round((Date.now() - t0) / 1000)}s）` : `没醒：HTTP ${res.status}`;
+  } catch (e) {
+    hint.textContent = '连不上：' + e.message;
+  } finally { clearInterval(tick); }
+};
+
+/* ============================================================
+ * 选片预检（R1）
+ * Safari 只放 MP4/MOV 里的 H.264/HEVC + AAC。MKV 容器、AC3/DTS 音轨一律不放。
+ * 与其让她对着黑屏猜，不如当场说清楚，并把失败原因送回后端。
+ * ============================================================ */
+function precheck(file) {
+  return new Promise((resolve) => {
+    const can = document.createElement('video').canPlayType(file.type || '');
+    if (file.type && can === '') {
+      return resolve({ ok: false, kind: 'canPlayType', detail: `${file.type} 返回空串` });
+    }
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    v.muted = true;
+    const url = URL.createObjectURL(file);
+    let done = false;
+    const finish = (r) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      resolve(r);
+    };
+    const timer = setTimeout(() => finish({ ok: false, kind: 'timeout', detail: '3 秒内没读出视频信息' }), PRECHECK_TIMEOUT_MS);
+    v.onloadedmetadata = () => {
+      if (v.videoWidth > 0 && v.duration > 0) finish({ ok: true, width: v.videoWidth, height: v.videoHeight, duration: v.duration });
+      else finish({ ok: false, kind: 'noStream', detail: `videoWidth=${v.videoWidth} duration=${v.duration}` });
+    };
+    v.onerror = () => finish({ ok: false, kind: 'mediaError', detail: `code=${v.error ? v.error.code : '?'}` });
+    v.src = url;
+  });
+}
+
+const UNPLAYABLE_MSG =
+  '这个文件 Safari 放不了。常见原因是 MKV 容器或 AC3/DTS 音轨。\n' +
+  '需要先在电脑上转成 MP4（H.264 + AAC），转好再传回 iPad。';
+
+$('videoFile').onchange = async (e) => {
+  const f = e.target.files[0];
+  $('videoErr').textContent = '';
+  $('videoPicked').textContent = '';
+  if (!f) return;
+  S.videoFile = null;
+  $('videoState').textContent = '检查中…';
+  $('videoPicked').textContent = `${f.name} · ${mb(f.size)}`;
+  const r = await precheck(f);
+  if (!r.ok) {
+    $('videoState').textContent = '';
+    $('videoErr').textContent = UNPLAYABLE_MSG;
+    reportFailure('playback', r.kind, `${r.detail}；type=${f.type || '(空)'}；后缀=${(f.name.match(/\.[^.]+$/) || [''])[0]}`);
+  } else {
+    S.videoFile = f;
+    $('videoState').textContent = `${r.width}×${r.height} · ${hms(r.duration * 1000)}`;
+  }
+  refreshStart();
+};
+
+/* ============================================================
+ * 字幕：解析 srt / vtt，GBK 兜底
+ * ============================================================ */
+async function readTextSmart(file) {
+  const buf = await file.arrayBuffer();
+  let text = new TextDecoder('utf-8').decode(buf);
+  // 中文字幕大量是 GBK：UTF-8 解出一堆替换字符时换 GBK 重来
+  const bad = (text.match(/�/g) || []).length;
+  if (bad > 3 && bad / Math.max(1, text.length) > 0.002) {
+    try { text = new TextDecoder('gbk').decode(buf); } catch { /* 不支持 gbk 就用原来的 */ }
+  }
+  return text;
+}
+
+function tsToMs(s) {
+  const m = s.trim().replace(',', '.').match(/^(?:(\d+):)?(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!m) return null;
+  const [, h, mi, se, ms] = m;
+  return ((+(h || 0)) * 3600 + (+mi) * 60 + (+se)) * 1000 + (+(ms || '0').padEnd(3, '0'));
+}
+
+function cleanLine(s) {
+  return s
+    .replace(/<[^>]*>/g, '')          // HTML 标签
+    .replace(/\{[^}]*\}/g, '')        // {\an8} 之类的样式块
+    .replace(/\r/g, '')
+    .trim();
+}
+
+function parseSubtitle(text) {
+  const out = [];
+  const blocks = text.replace(/^﻿/, '').split(/\n\s*\n/);
+  for (const b of blocks) {
+    const lines = b.split('\n').filter((l) => l.trim() !== '');
+    if (!lines.length) continue;
+    const tIdx = lines.findIndex((l) => l.includes('-->'));
+    if (tIdx < 0) continue;
+    const [a, z] = lines[tIdx].split('-->');
+    const startMs = tsToMs((a || '').split(' ')[0]);
+    const endMs = tsToMs((z || '').trim().split(' ')[0]);
+    if (startMs === null || endMs === null) continue;
+    const body = lines.slice(tIdx + 1).map(cleanLine).filter(Boolean).join('\n');
+    if (body) out.push({ startMs, endMs, text: body });
+  }
+  out.sort((x, y) => x.startMs - y.startMs);
+  return out;
+}
+
+$('subFile').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('subState').textContent = '解析中…';
+  try {
+    const cues = parseSubtitle(await readTextSmart(f));
+    S.cues = cues;
+    S.offsetMs = parseInt(store.get('offset:' + (S.videoFile ? S.videoFile.name : f.name), '0'), 10) || 0;
+    $('subState').textContent = cues.length ? `${cues.length} 句` : '一句都没解析出来';
+    $('subPicked').textContent = `${f.name} · ${mb(f.size)}`;
+  } catch (err) {
+    $('subState').textContent = '读不了：' + err.message;
+    reportFailure('subtitle', 'parse', err.message);
+  }
+  refreshStart();
+};
+
+/* ============================================================
+ * 大厅：开始
+ * ============================================================ */
+function refreshStart() {
+  const ready = Boolean(S.videoFile);
+  $('start').disabled = !ready;
+  $('startHint').textContent = !ready ? ''
+    : (S.cues.length ? '' : '没有字幕，AI 将靠画面识别台词');
+}
+
+$('joinId').oninput = (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); };
+
+$('start').onclick = async () => {
+  $('start').disabled = true;
+  const joinId = $('joinId').value.trim();
+  try {
+    if (joinId) {
+      const room = await call(`/rooms/${joinId}`);        // 加入＝GET 确认存在
+      S.roomId = room.id;
+      S.title = room.title;
+      // 房间里已经有字幕，而本机没选：直接用房间里的，不要求重传
+      if (!S.cues.length && room.subtitle.loaded) {
+        const got = await call(`/rooms/${room.id}/subtitle`);
+        S.cues = got.cues || [];
+      }
+    } else {
+      const room = await call('/rooms', { method: 'POST', body: { title: $('title').value.trim() || (S.videoFile.name || '未命名') } });
+      S.roomId = room.id;
+      S.title = room.title;
+    }
+    if (S.cues.length) await uploadSubtitle();
+    for (const f of S.orphanFailures.splice(0)) {
+      call(`/rooms/${S.roomId}/failure`, { method: 'POST', body: f }).catch(() => {});
+    }
+    store.set('lastRoom', S.roomId);
+    store.set('lastTitle', S.title);
+    enterScreen();
+  } catch (e) {
+    $('joinHint').textContent = e.status === 404
+      ? '房间不存在，或者已经过期了'
+      : ('连不上后端：' + e.message);
+    $('start').disabled = false;
+  }
+};
+
+async function uploadSubtitle() {
+  const payload = JSON.stringify({ cues: S.cues.map((c) => ({ startMs: c.startMs, endMs: c.endMs, text: c.text })) });
+  const r = await call(`/rooms/${S.roomId}/subtitle`, { method: 'POST', raw: payload, type: 'application/json' });
+  if (r && r.note) toast(r.note, 3000);
+}
+
+/* ============================================================
+ * 放映
+ * ============================================================ */
+const video = $('video');
+
+function enterScreen() {
+  show('screen');
+  S.videoUrl = URL.createObjectURL(S.videoFile);   // 不要用 FileReader，大文件会炸内存
+  video.src = S.videoUrl;
+  $('offsetBox').textContent = fmtOffset();
+  bumpControls();
+  startHeartbeat();
+  startCueTimer();
+  requestWakeLock();
+  // 首次播放必须由用户手势触发，这里不自动 play()
+  toast('点一下画面开始', 2500);
+}
+
+video.addEventListener('play', () => { $('playPause').textContent = '❚❚'; });
+video.addEventListener('pause', () => { $('playPause').textContent = '▶︎'; });
+video.addEventListener('timeupdate', () => {
+  const d = video.duration || 0;
+  $('seek').value = d ? Math.round((video.currentTime / d) * 1000) : 0;
+  $('clock').textContent = `${hms(video.currentTime * 1000)} / ${hms(d * 1000)}`;
+});
+video.addEventListener('error', () => {
+  const code = video.error ? video.error.code : '?';
+  toast('这个文件放不了（错误 ' + code + '）', 4000);
+  reportFailure('playback', 'mediaError', 'code=' + code + ' 播放中');
+});
+
+$('playPause').onclick = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
+$('seek').oninput = (e) => { if (video.duration) video.currentTime = (e.target.value / 1000) * video.duration; };
+
+// 轻点画面：唤出控件；播放中 3 秒无操作又什么都不剩
+let hideTimer = null;
+function bumpControls() {
+  $('controls').classList.add('on');
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => { if (!video.paused) $('controls').classList.remove('on'); }, CONTROLS_HIDE_MS);
+}
+$('screen').addEventListener('click', (e) => {
+  if (e.target.closest('#controls')) { bumpControls(); return; }
+  if ($('controls').classList.contains('on')) {
+    // 控件已经在，轻点画面＝播放/暂停（第一次点也在这里触发，满足用户手势要求）
+    video.paused ? video.play().catch(() => {}) : video.pause();
+  }
+  bumpControls();
+});
+
+$('exit').onclick = async () => {
+  try { await call(`/rooms/${S.roomId}/finish`, { method: 'POST', body: { watchedMs: Math.round((video.currentTime || 0) * 1000) } }); } catch { /* 结束不成也要能退出 */ }
+  stopHeartbeat();
+  clearInterval(S.cueTimer);
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  if (S.videoUrl) { URL.revokeObjectURL(S.videoUrl); S.videoUrl = null; }
+  releaseWakeLock();
+  $('danmakuLayer').innerHTML = '';
+  $('subtitle').textContent = '';
+  S.roomId = null;
+  $('start').disabled = false;
+  show('lobby');
+};
+
+/* ---- 记下这句 / 说一句 ---------------------------------------------- */
+$('quote').onclick = async () => {
+  const cue = currentCue();
+  if (!cue) { toast('这会儿没有台词'); return; }
+  try {
+    await call(`/rooms/${S.roomId}/quotes`, { method: 'POST', body: { text: cue.text, positionMs: Math.round(video.currentTime * 1000) } });
+    const el = $('quote');
+    el.textContent = '记下了';
+    setTimeout(() => { el.textContent = '记下这句'; }, 800);
+  } catch (e) { toast('没记上：' + e.message); }
+};
+
+$('sayBtn').onclick = async () => {
+  const text = prompt('说一句（会浮到画面上）');
+  if (!text || !text.trim()) return;
+  try {
+    await call(`/rooms/${S.roomId}/danmaku`, { method: 'POST', body: { text: text.trim(), author: store.get('nick', '') || '我' } });
+    flyDanmaku({ text: text.trim(), author: store.get('nick', '') || '我' });
+  } catch (e) { toast('没发出去：' + e.message); }
+};
+
+/* ============================================================
+ * 字幕定位与对轴
+ * 顺序播放时是 O(1)：先看相邻几条，不中再二分
+ * ============================================================ */
+function findCue(ms) {
+  const cues = S.cues;
+  if (!cues.length) return -1;
+  const hit = (i) => i >= 0 && i < cues.length && ms >= cues[i].startMs && ms <= cues[i].endMs;
+  for (let d = 0; d <= 2; d++) {
+    if (hit(S.cueIndex + d)) return S.cueIndex + d;
+    if (hit(S.cueIndex - d)) return S.cueIndex - d;
+  }
+  let lo = 0; let hi = cues.length - 1; let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cues[mid].startMs <= ms) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans >= 0 && ms <= cues[ans].endMs ? ans : -1;
+}
+
+function currentCue() { return S.cueIndex >= 0 ? S.cues[S.cueIndex] : null; }
+
+function startCueTimer() {
+  clearInterval(S.cueTimer);
+  S.cueTimer = setInterval(() => {
+    if (!S.cues.length) return;
+    const ms = video.currentTime * 1000 - S.offsetMs;
+    const idx = findCue(ms);
+    if (idx !== S.cueIndex) {
+      S.cueIndex = idx;
+      $('subtitle').textContent = idx >= 0 ? S.cues[idx].text : '';
+    }
+  }, CUE_TICK_MS);
+}
+
+function fmtOffset() {
+  const s = S.offsetMs / 1000;
+  return (s > 0 ? '+' : s < 0 ? '−' : '±') + Math.abs(s).toFixed(1) + 's';
+}
+
+function nudgeOffset(deltaMs) {
+  S.offsetMs += deltaMs;
+  $('offsetBox').textContent = fmtOffset();
+  if (S.videoFile) store.set('offset:' + S.videoFile.name, String(S.offsetMs));
+  // 对轴时把当前这句摆到画面中央，好对口型
+  const idx = findCue(video.currentTime * 1000 - S.offsetMs);
+  const peek = $('alignPeek');
+  peek.textContent = idx >= 0 ? S.cues[idx].text : '（这一刻没有台词）';
+  peek.classList.add('on');
+  clearTimeout(nudgeOffset._t);
+  nudgeOffset._t = setTimeout(() => peek.classList.remove('on'), 1200);
+  bumpControls();
+}
+
+// 长按连续调整，步进加速
+function holdToNudge(btn, sign) {
+  let timer = null; let step = 500; let held = 0;
+  const startHold = (e) => {
+    e.preventDefault();
+    nudgeOffset(sign * step);
+    held = 0;
+    timer = setInterval(() => {
+      held += 1;
+      if (held > 6) step = 1000;
+      if (held > 14) step = 2000;
+      nudgeOffset(sign * step);
+    }, 300);
+  };
+  const endHold = () => { clearInterval(timer); step = 500; };
+  btn.addEventListener('touchstart', startHold, { passive: false });
+  btn.addEventListener('mousedown', startHold);
+  for (const ev of ['touchend', 'touchcancel', 'mouseup', 'mouseleave']) btn.addEventListener(ev, endHold);
+}
+holdToNudge($('offMinus'), -1);
+holdToNudge($('offPlus'), +1);
+
+/* ============================================================
+ * 弹幕上屏
+ * ============================================================ */
+const trackFreeAt = new Array(DANMAKU_TRACKS).fill(0);
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function flyDanmaku({ text, author }) {
+  const now = Date.now();
+  let track = trackFreeAt.findIndex((t) => t <= now);
+  if (track < 0) track = Math.floor(Math.random() * DANMAKU_TRACKS);
+  trackFreeAt[track] = now + TRACK_COOLDOWN_MS;
+
+  const el = document.createElement('div');
+  el.className = 'danmaku';
+  el.innerHTML = `<span class="who"></span><span class="txt"></span>`;
+  el.querySelector('.who').textContent = author ? author + '：' : '';
+  el.querySelector('.txt').textContent = text;
+  el.style.top = `${6 + track * 9}%`;
+  $('danmakuLayer').appendChild(el);
+
+  if (reduceMotion) {
+    // 不做横向滑动：固定位置停 4 秒后淡出
+    el.style.left = 'auto';
+    el.style.right = '4vw';
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 500); }, 4000);
+    return;
+  }
+  const width = el.offsetWidth;
+  const distance = window.innerWidth + width;
+  el.animate(
+    [{ transform: 'translateX(0)' }, { transform: `translateX(-${distance}px)` }],
+    { duration: DANMAKU_TRAVEL_MS, easing: 'linear' },
+  ).onfinish = () => el.remove();
+}
+
+/* ============================================================
+ * 抓帧（含黑帧检测）
+ * ============================================================ */
+function isBlackFrame(ctx, w, h) {
+  const step = Math.max(1, Math.floor(Math.sqrt((w * h) / BLACK_SAMPLES)));
+  let checked = 0;
+  for (let y = Math.floor(step / 2); y < h; y += step) {
+    for (let x = Math.floor(step / 2); x < w; x += step) {
+      const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+      if (r + g + b >= BLACK_SUM) return false;
+      checked += 1;
+      if (checked >= BLACK_SAMPLES) return true;
+    }
+  }
+  return checked > 0;
+}
+
+async function grabFrame() {
+  if (S.frameDead) return;
+  try {
+    const canvas = document.createElement('canvas');
+    const scale = Math.min(1, 1280 / (video.videoWidth || 1280));
+    canvas.width = Math.max(1, Math.round((video.videoWidth || 0) * scale));
+    canvas.height = Math.max(1, Math.round((video.videoHeight || 0) * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // 片头黑场、淡入淡出本来就该是黑的：连续两次全黑才判定为解码器不给帧
+    if (isBlackFrame(ctx, canvas.width, canvas.height)) {
+      S.consecutiveBlack += 1;
+      if (S.consecutiveBlack >= 2) {
+        S.frameDead = true;
+        await reportFailure('frame', 'black', '连续两次抓到全黑帧，判定为解码器不给帧');
+        if (!S.cues.length) toast('这个片源没法给 AI 看画面，建议加载字幕文件', 5000);
+        return;
+      }
+    } else {
+      S.consecutiveBlack = 0;
+    }
+
+    const blob = await new Promise((resolve, reject) => {
+      if (!canvas.toBlob) return reject(new Error('没有 toBlob'));
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob 给了空'))), 'image/jpeg', 0.6);
+    });
+    await call(`/rooms/${S.roomId}/frame?positionMs=${Math.round(video.currentTime * 1000)}`, {
+      method: 'POST', raw: blob, type: 'image/jpeg',
+    });
+  } catch (e) {
+    // 不许静默失败：把原因送回后端，让 AI 能看到为什么没有画面
+    await reportFailure('frame', 'capture', e.message);
+  }
+}
+
+/* ============================================================
+ * 心跳（含弹幕 ack 与掉房重建）
+ * ============================================================ */
+function setDot(cls) { $('dot').className = cls || ''; }
+
+async function beat() {
+  if (!S.roomId) return;
+  const body = {
+    state: video.paused ? 'paused' : 'playing',
+    positionMs: Math.round((video.currentTime || 0) * 1000),
+    durationMs: Math.round((video.duration || 0) * 1000),
+    subtitleIndex: S.cueIndex,
+  };
+  if (S.pendingAcks.length) body.ackedDanmaku = S.pendingAcks.splice(0);
+  try {
+    const r = await call(`/rooms/${S.roomId}/heartbeat`, { method: 'POST', body });
+    S.lastBeatOk = Date.now();
+    setDot('');
+    for (const d of r.pendingDanmaku || []) {
+      flyDanmaku(d);
+      S.pendingAcks.push(d.id);      // 上屏了才 ack，下一次心跳带回去
+    }
+    if (r.frameRequest) grabFrame();
+  } catch (e) {
+    if (e.status === 404) return rebuildRoom();
+    setDot(Date.now() - S.lastBeatOk > 15000 ? 'bad' : 'warn');
+    // ack 没送到：放回去，下一轮重发，别让它丢
+    if (body.ackedDanmaku) S.pendingAcks.unshift(...body.ackedDanmaku);
+  }
+}
+
+/** 后端重启、房间没了：用本机记着的信息重建同号房间，字幕重传一次。 */
+async function rebuildRoom() {
+  try {
+    await call('/rooms', { method: 'POST', body: { title: S.title, id: S.roomId } });
+    if (S.cues.length) await uploadSubtitle();
+    setDot('');
+    toast('房间重建了', 1200);       // 极轻，不弹窗、不打断播放
+  } catch (e) {
+    setDot('bad');
+  }
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+  S.lastBeatOk = Date.now();
+  beat();
+  S.beating = setInterval(beat, HEARTBEAT_MS);
+}
+function stopHeartbeat() { clearInterval(S.beating); S.beating = null; }
+
+// iOS 切后台会挂起页面：隐藏时停心跳，回来立刻补一次并重新对齐
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { stopHeartbeat(); return; }
+  if (S.roomId) { startHeartbeat(); requestWakeLock(); }
+});
+
+/* ============================================================
+ * 屏幕常亮
+ * ============================================================ */
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;      // 不支持就跳过，不报错
+  try { S.wakeLock = await navigator.wakeLock.request('screen'); } catch { /* 被拒绝也不影响看片 */ }
+}
+function releaseWakeLock() {
+  try { if (S.wakeLock) S.wakeLock.release(); } catch { /* 已经释放 */ }
+  S.wakeLock = null;
+}
+
+/* ============================================================
+ * 启动
+ * ============================================================ */
+loadSettings();
+show(store.get('setupDone') ? 'lobby' : 'setup');
+if (store.get('lastRoom')) $('joinId').placeholder = store.get('lastRoom');
+</script>
 </body>
 </html>

@@ -168,6 +168,13 @@ function register(router) {
     return res.status(201).json(store.reportFailure(req.room, { scope, kind, detail }));
   });
 
+  // ---- 还没建房就失败了（选片预检挂在这里）----------------------------
+  // 没有这条的话，R1 的信号永远到不了后端：预检失败时根本没有房间可挂
+  router.post('/api/failures', (req, res) => {
+    const { scope, kind, detail } = req.body || {};
+    return res.status(201).json(store.reportOrphanFailure({ scope, kind, detail }));
+  });
+
   // ---- 这一场结束（幂等）---------------------------------------------
   router.post('/api/rooms/:id/finish', withRoom, (req, res) => {
     const { watchedMs } = req.body || {};

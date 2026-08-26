@@ -79,6 +79,66 @@ test('名额满了：挤掉已散场的房间，但不挤还没生成票根的�
   assert.strictEqual(store.getRoom(first.id), null, '票根已生成的旧房间应被回收');
 });
 
+test('淘汰没票根的房间前，先把摘录和笔记抢救进降级通道', () => {
+  const dir = tmpDir('rescue');
+  const store = freshStore(dir);
+  const cap = store._internals.MAX_ROOMS;
+  const first = store.createRoom('没聊完就散了');
+  store.addQuote(first, { text: '如果我多一张船票', positionMs: 1834000 });
+  store.addNote(first, { text: '她一直没回头' });
+  for (let i = 1; i < cap; i++) store.createRoom(`第${i + 1}部`);
+  store.finish(first, 7200000);
+  first.finishedAt = new Date(Date.now() - store._internals.FINISHED_GRACE_MS - 1000).toISOString();
+
+  store.createRoom('新的一部');
+  assert.strictEqual(store.getRoom(first.id), null, '房间应被回收');
+
+  const rescued = fs.readFileSync(path.join(dir, store._internals.RESCUE_FILE), 'utf8').trim();
+  const rec = JSON.parse(rescued);
+  assert.strictEqual(rec.roomId, first.id);
+  assert.strictEqual(rec.quotes[0].text, '如果我多一张船票');
+  assert.strictEqual(rec.notes[0].text, '她一直没回头');
+});
+
+test('抢救写不进去就不许淘汰——宁可建房失败也不能无声无息丢掉', () => {
+  const dir = tmpDir('rescuefail');
+  const store = freshStore(dir);
+  const cap = store._internals.MAX_ROOMS;
+  const first = store.createRoom('有摘录的');
+  store.addQuote(first, { text: '不能丢的一句', positionMs: 1000 });
+  for (let i = 1; i < cap; i++) store.createRoom(`第${i + 1}部`);
+  store.finish(first, 1000);
+  first.finishedAt = new Date(Date.now() - store._internals.FINISHED_GRACE_MS - 1000).toISOString();
+
+  const realOpen = fs.openSync;
+  fs.openSync = (f, ...rest) => {
+    if (String(f).endsWith(store._internals.RESCUE_FILE)) throw new Error('盘满了');
+    return realOpen(f, ...rest);
+  };
+  try {
+    assert.throws(() => store.createRoom('新的一部'), /没有已经散场的可以回收/);
+  } finally {
+    fs.openSync = realOpen;
+  }
+  assert.ok(store.getRoom(first.id), '抢救失败时房间必须留着');
+  assert.strictEqual(store.getRoom(first.id).quotes[0].text, '不能丢的一句');
+});
+
+test('票根已生成的房间被淘汰时不需要抢救（内容已经进记忆了）', () => {
+  const dir = tmpDir('noresc');
+  const store = freshStore(dir);
+  const cap = store._internals.MAX_ROOMS;
+  const first = store.createRoom('已出票根');
+  store.addQuote(first, { text: '这句已经在票根里了', positionMs: 1000 });
+  for (let i = 1; i < cap; i++) store.createRoom(`第${i + 1}部`);
+  store.finish(first, 1000);
+  store.setTicket(first, { title: '已出票根' });
+
+  store.createRoom('新的一部');
+  assert.strictEqual(store.getRoom(first.id), null);
+  assert.ok(!fs.existsSync(path.join(dir, store._internals.RESCUE_FILE)), '不该产生抢救文件');
+});
+
 test('散场超过一小时的房间，即使没票根也可以被挤掉', () => {
   const store = freshStore(tmpDir('evictold'));
   const cap = store._internals.MAX_ROOMS;
