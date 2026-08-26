@@ -21,8 +21,7 @@
  * - 不碰 ombre 的记忆桶、不碰 read-along 的 data/
  * - 不做用户系统、不存视频文件（视频只存在于用户自己的设备上）
  *
- * M1 只到「服务起得来、/healthz 可达、页面能发出去」。房间状态、HTTP API
- * 见 store.js / routes.js（M2）。
+ * 房间状态见 store.js，HTTP API 见 routes.js。
  * ============================================================ */
 
 'use strict';
@@ -30,6 +29,9 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+
+const store = require('./store');
+const routes = require('./routes');
 
 // ============================================================
 // 调参面板
@@ -86,7 +88,16 @@ function readPage() {
 // ============================================================
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: JSON_BODY_LIMIT }));
+
+// 全局 JSON 解析器按 v2 §1.4 锁在 1 MB，且**跳过两条走 raw body 的路径**：
+// 字幕（5000 条中文能到几 MB）和帧（二进制）。不跳过的话它会先把 body 吃掉，
+// 后面路由上的 express.raw 只会拿到一个已解析的对象——第一次 curl 验收就栽在这。
+const RAW_BODY_ROUTES = /\/(subtitle|frame)$/;
+app.use(express.json({
+  limit: JSON_BODY_LIMIT,
+  type: (req) => !(req.method === 'POST' && RAW_BODY_ROUTES.test((req.url || '').split('?')[0]))
+    && /json/i.test(req.headers['content-type'] || ''),
+}));
 
 // 健康检查：不带 token，给 bridge / Render healthCheck / 排查用
 app.get('/healthz', (req, res) => {
@@ -101,6 +112,9 @@ app.use('/:token', (req, res, next) => {
   if (req.params.token !== TOKEN) return res.status(404).end();
   return gated(req, res, next);
 });
+
+// HTTP API（/<token>/api/*）
+routes.register(gated);
 
 // 播放器页面
 gated.get('/', (req, res) => {
@@ -125,9 +139,11 @@ gated.use((req, res) => res.status(404).end());
 // ============================================================
 function main() {
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    store.init({ dataDir: DATA_DIR });
   } catch (e) {
-    console.error(`[ferrideo] 数据目录建不了 ${DATA_DIR}: ${e.message}`);
+    // 存储起不来就别装作能用：子进程退出，ombre 侧只降级 warning
+    console.error(`[ferrideo] 存储初始化失败 ${DATA_DIR}: ${e.message}`);
+    process.exit(1);
   }
   const envPort = parseInt(process.env.PORT || '', 10);
   const port = Number.isInteger(envPort)
@@ -144,7 +160,10 @@ function main() {
   });
   // 被 bridge terminate 时干净退出（不留孤儿端口）
   for (const sig of ['SIGTERM', 'SIGINT']) {
-    process.on(sig, () => server.close(() => process.exit(0)));
+    process.on(sig, () => {
+      store.stop();          // 退出前把待写的快照落盘
+      server.close(() => process.exit(0));
+    });
   }
 }
 
