@@ -26,7 +26,7 @@ REQUIRED = {
     "hold": ["记住", "存下来", "别忘了", "记一笔"],
     "grow": ["记住", "存下来", "别忘了", "记一笔"],  # 见下方注释，按语义等价放宽
     "plan": ["待办", "答应过", "还没做完", "欠着的"],
-    "diary_read": ["最近怎么样", "这几天", "近况", "在忙什么"],
+    "diary": ["最近怎么样", "这几天", "近况", "在忙什么", "记一下今天", "日常进展"],
     "trace": ["改记忆", "标记已解决", "放下了"],
 }
 
@@ -53,12 +53,104 @@ def _docstrings() -> dict[str, str]:
     return out
 
 
+# ------------------------------------------------------------
+# iter 2.3 瘦身：24 -> 14
+#
+# 原来这里断言 `len(docs) >= 23`。合并入口之后个数会掉，光看个数既拦不住
+# 「谁被误删了」也拦不住「谁被误加回去了」，所以改成钉住名单本身。
+#
+# server.py 里带 @mcp*.tool() 的一共 16 个；anchor / release 装饰器留着
+# （代码不动、随时能回退），但在启动入口处按 _DISABLED_TOOLS 从注册表 del
+# 掉，所以实际对外是 14 个。night_fall 由外部包注册，不在本文件源码里。
+# ------------------------------------------------------------
+
+# 源码里仍带 @mcp*.tool() 装饰器的
+DECORATED = {
+    "breath", "hold", "grow", "trace", "dream",
+    "peek", "phone_activity_query", "pulse", "plan", "I",
+    "anchor", "release",                      # 装饰器留着，启动时才摘
+    "diary", "letter", "reading", "speak",    # 4 个合并入口
+}
+# 合并进上面 4 个入口、不再单独注册的薄壳
+MERGED_AWAY = {
+    "diary_read", "diary_write",
+    "letter_read", "letter_write",
+    "reading_progress", "reading_text", "reading_search",
+    "reading_annotate", "reading_annotations",
+    "bark_push",
+}
+
+
+def test_registered_tool_set_is_exactly_the_slimmed_list():
+    names = set(_docstrings())
+    assert names == DECORATED, (
+        f"多出: {sorted(names - DECORATED)} / 少了: {sorted(DECORATED - names)}"
+    )
+
+
+def test_merged_shells_are_no_longer_registered():
+    """薄壳函数必须还在源码里，但不能再挂 @mcp*.tool()——挂上就等于瘦身白做。"""
+    src = _source()
+    names = set(_docstrings())
+    for shell in sorted(MERGED_AWAY):
+        assert f"async def {shell}(" in src, f"{shell} 的函数被删了，合并入口会调空"
+        assert shell not in names, f"{shell} 又被单独注册了，工具数会涨回去"
+    # speak 与合并入口重名，内层改成了 _speak_voice
+    assert "async def _speak_voice(" in src
+
+
+def test_disabled_tools_are_pinned():
+    """摘除名单是回退开关：改它要有意识，别顺手动。"""
+    src = _source()
+    assert '_DISABLED_TOOLS = ("night_fall", "anchor", "release")' in src
+    assert "del mcp._tool_manager._tools[_dead]" in src
+
+
 def test_every_registered_tool_has_a_synonym_prefix():
     docs = _docstrings()
-    assert len(docs) >= 23, f"只抓到 {len(docs)} 个工具，正则可能失配"
 
     missing = [n for n, d in docs.items() if not d.startswith("【")]
     assert not missing, f"以下工具的 description 没有同义词前缀: {missing}"
+
+
+# 合并之后，被摘掉的工具的口语词只剩合并入口这一处出口。
+# 少一个词，用户那句话就再也搜不到对应的工具了——这里逐个钉住。
+MERGED_PREFIX_WORDS = {
+    "diary": ["最近怎么样", "这几天", "近况", "在忙什么", "交接班",   # 原 diary_read
+              "记一下今天", "最近在忙", "日常进展", "正在发生"],       # 原 diary_write
+    "letter": ["读信", "看以前的信", "翻旧信",                         # 原 letter_read
+               "写信", "留一封信", "给她写", "给下一个我"],            # 原 letter_write
+    "reading": ["读到哪了", "书架", "在读什么书",     # 原 reading_progress
+                "看原文", "回看", "正文", "段落",     # 原 reading_text
+                "书里搜", "找那句话", "全文检索",     # 原 reading_search
+                "划线", "批注", "标注",               # 原 reading_annotate
+                "看批注", "回批注"],                  # 原 reading_annotations
+    "speak": ["发语音", "说话", "念给她听", "语音消息", "配音",        # 原 speak
+              "推送", "发通知", "提醒她", "手机弹窗"],                 # 原 bark_push
+}
+
+MERGED_ACTIONS = {
+    "diary": ["read", "write"],
+    "letter": ["read", "write"],
+    "reading": ["progress", "text", "search", "annotate", "annotations"],
+    "speak": ["voice", "push"],
+}
+
+
+@pytest.mark.parametrize("tool", sorted(MERGED_PREFIX_WORDS))
+def test_merged_entry_keeps_every_swallowed_synonym(tool):
+    prefix = _docstrings()[tool]
+    prefix = prefix[:prefix.index("】")]
+    missing = [w for w in MERGED_PREFIX_WORDS[tool] if w not in prefix]
+    assert not missing, f"{tool} 吞掉了原工具的口语词: {missing}"
+
+
+@pytest.mark.parametrize("tool", sorted(MERGED_ACTIONS))
+def test_merged_entry_documents_every_action(tool):
+    """action 是唯一的分发依据，描述里没写清就等于这个功能消失了。"""
+    doc = _docstrings()[tool]
+    for act in MERGED_ACTIONS[tool]:
+        assert f'action="{act}"' in doc, f"{tool} 的描述没写 action={act!r}"
 
 
 def test_synonym_prefix_is_not_empty():
@@ -86,8 +178,8 @@ def test_prefix_does_not_replace_the_original_description():
     docs = _docstrings()
     assert "importance_min" in docs["breath"]
     assert "pinned=True" in docs["hold"]
-    assert "YYYY-MM-DD" in docs["diary_write"]
-    assert "明天还在不在" in docs["diary_write"]   # diary 的判断标准不能被挤掉
+    assert "YYYY-MM-DD" in docs["diary"]
+    assert "明天还在不在" in docs["diary"]         # diary 的判断标准不能被挤掉
     assert "delete=True" in docs["trace"]
 
 
@@ -105,10 +197,10 @@ def test_time_window_tools_declare_their_boundaries():
     docs = _docstrings()
 
     assert "全库翻找" in docs["breath"]
-    assert "dream" in docs["breath"] and "diary_read" in docs["breath"]
+    assert "dream" in docs["breath"] and 'diary(action="read")' in docs["breath"]
 
     assert "不含 diary" in docs["dream"]
-    assert "diary_read" in docs["dream"]
+    assert 'diary(action="read")' in docs["dream"]
     assert "breath" in docs["dream"]
 
 
@@ -125,7 +217,7 @@ def test_diary_read_defers_to_the_session_start_hook():
     要她自己打出「自己看 dairy」才去读。所以描述必须分两种客户端说清楚：
     看得见那一段就别重复调（原方向不变），看不见就主动调（新增的那一半）。
     这条同时钉住两个方向，缺一边都算回退。"""
-    doc = _docstrings()["diary_read"]
+    doc = _docstrings()["diary"]
 
     assert "唯一的读取路径" in doc
     assert "SessionStart" in doc
@@ -138,11 +230,14 @@ def test_diary_read_defers_to_the_session_start_hook():
 
 
 def test_hold_and_diary_write_point_at_each_other():
-    """边界此前只写在 diary_write 一侧，单向的指路只能挡住一个方向。"""
+    """边界此前只写在 diary_write 一侧，单向的指路只能挡住一个方向。
+
+    iter 2.3：diary_write 并进了 diary(action="write")，指路的写法要跟着换成
+    模型真能照着调的形式——写旧工具名等于指到一个不存在的工具上。"""
     docs = _docstrings()
 
-    assert "diary_write" in docs["hold"]
-    assert "不要拿 diary 替代 hold" in docs["diary_write"]
+    assert 'diary(action="write")' in docs["hold"]
+    assert "不要拿 diary 替代 hold" in docs["diary"]
 
 
 def test_server_py_keeps_crlf_line_endings():

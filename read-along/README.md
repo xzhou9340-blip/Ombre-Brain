@@ -74,7 +74,8 @@ curl -s https://<ombre域名>/reading/<token>/api/books
 
 ## 验收清单
 
-1. ombre 原有 20 个工具全部正常（含 bark_push / phone_activity_query）。
+1. ombre 原有工具全部正常（共读走 `reading(action=…)`，推送走 `speak(action="push")`，
+   另有 `phone_activity_query`）。
 2. 手机打开 `https://<ombre域名>/reading/<token>/`，「＋导入」上传
    epub/txt，能翻页阅读。
 3. 停在某页超过阈值（默认 15 秒），Render Shell 里
