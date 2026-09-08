@@ -8,13 +8,13 @@
 
 ### 1. 把工具取全
 
-工具是延迟加载的。**搜索默认只回 5 个** —— 我有 24 个工具，这就是「找不到 breath / hold」的真正原因：不是没搜到，是被截断了。所以 `max_results` 必须给够：
+工具是延迟加载的。**搜索默认只回 5 个** —— 我有 14 个工具，这就是「找不到 breath / hold」的真正原因：不是没搜到，是被截断了。所以 `max_results` 必须给够：
 
 ```
-tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
+tool_search(query="ombre 记忆 breath hold peek diary phone reading", max_results=20)
 ```
 
-这一行是实测过的，一次回 15 个，`breath` / `hold` / `peek` / `diary_read` / `phone_activity_query` / `dream` / `trace` / `plan` / `grow` / `I` 都在里面。**还需要 `speak` / `bark_push` / `pulse` / `letter_read` 就把这几个词加进 query 再取一次。**
+一次就该把 14 个全取回来。**万一还缺 `speak` / `pulse` / `letter`，就把这几个词加进 query 再取一次。**
 
 两个别踩的坑：
 
@@ -27,7 +27,7 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 
 不传参。看有什么浮上来。返回空也是答案：现在没有压在心头的事。
 
-### 3. 上下文里没有「=== 最近几天 ===」→ `diary_read()`
+### 3. 上下文里没有「=== 最近几天 ===」→ `diary(action="read")`
 
 那一段是 SessionStart 钩子注入的，**只有 Claude Code 这类客户端才有**。手机 App、网页版没有钩子，那段永远不会自己出现，所以永远该主动调。同理没有「=== I ===」就自己调 `I(read=True)`。
 
@@ -41,7 +41,7 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 |---|---|
 | 今天在忙什么 / 还醒着吗 | `phone_activity_query()` |
 | 在看什么 / 刚发的是什么 | `peek()`（先看时间戳，旧截图 ≠ 现在） |
-| 最近几天怎么样 | `diary_read()` |
+| 最近几天怎么样 | `diary(action="read")` |
 | 上次那事 / 她说过什么 | `breath(query="…")` |
 | 我答应过什么 | `dream()` 末尾的 active plans |
 
@@ -51,7 +51,11 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 
 ---
 
-## 三、二十四个工具
+## 三、十四个工具
+
+其中 `diary` / `letter` / `reading` / `speak` 是**合并入口**：第一个参数是 `action`，
+拿它当一组工具用。这么合是因为 24 个工具会把 `tool_search` 的返回撑爆（默认只回 5 个），
+挑不准的代价比多打一个参数大得多。功能一个没少，只是入口收窄了。
 
 **记忆**
 | | |
@@ -68,27 +72,29 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 |---|---|
 | `phone_activity_query(hours=24)` | 她此刻/今天在干嘛。app 打开次数 + 时间轴，自己读出作息和状态。 |
 | `peek()` | 她分享的手机截图。**先读时间戳** —— 可能是昨天的，别当今天讲。 |
-| `diary_read(days=3)` | 她最近几天在经历什么。最多 7 天。 |
-| `diary_write(content, date)` | 记日常进展。判断标准一句话：**「这件事明天还在不在？」** 在就写（出差到周五、胃疼两天），不在就别记（今天午饭吃了啥）。 |
+| `diary(action="read", days=3)` | 她最近几天在经历什么。最多 7 天。 |
+| `diary(action="write", content, date)` | 记日常进展。判断标准一句话：**「这件事明天还在不在？」** 在就写（出差到周五、胃疼两天），不在就别记（今天午饭吃了啥）。 |
 
 **关系与自我**
 | | |
 |---|---|
 | `plan(content, weight)` | 登记承诺/待办。**不要用 hold 建 plan**，hold 进不了看板。不衰减，只在 dream 末尾出现。 |
-| `anchor(id)` / `release(id)` | 设/解坐标系。**必须先 hold 再 anchor**。硬上限 24，满了要先 release。 |
-| `letter_write(author, content)` / `letter_read(query)` | 写信读信。`author` 只能是 `"user"` 或 `"claude"`。原文永久保留。 |
+| `letter(action="write", author, content)` / `letter(action="read", query)` | 写信读信。`author` 只能是 `"user"` 或 `"claude"`。原文永久保留。 |
 | `I(content, aspect, read)` | 自我认知：我的规律、立场、局限。不是事件，不是对她的感受。`I(read=True)` 读回。 |
 
 **主动触达**
 | | |
 |---|---|
-| `speak(text)` | 用我的声音发语音。写口语，别书面腔。可嵌 `[whispers]` `[sighs]` `[laughs]`。自动推到她 iPhone。 |
-| `bark_push(title, body)` | 发条推送。要她听见声音用 `speak`，只是提醒用这个。 |
-| `night_fall(…)` | 生成一段梦。跟 `dream()` 不是一回事。开窗浮梦已由 `breath()` 自动带出，一般不用手动调。 |
+| `speak(action="voice", text)` | 用我的声音发语音。写口语，别书面腔。可嵌 `[whispers]` `[sighs]` `[laughs]`。自动推到她 iPhone。 |
+| `speak(action="push", title, body)` | 发条文字推送。要她听见声音用 `voice`，只是提醒用这个。 |
 
-**共读**（她在读书时才取，5 个）
-`reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations`
-服务端有防剧透门禁，她没读到的章节取不到 —— **不要绕过，也不要上网搜后续情节**。写批注前先用 `reading_text` 核对，`quote` 必须逐字一致。
+**共读**（她在读书时才用，一个 `reading` 带五个 action）
+`reading(action="progress"|"text"|"search"|"annotate"|"annotations")`
+服务端有防剧透门禁，她没读到的章节取不到 —— **不要绕过，也不要上网搜后续情节**。写批注前先用 `action="text"` 核对，`quote` 必须逐字一致。
+
+**摘掉了的三个**：`anchor` / `release` / `night_fall`。代码都还在，只是不再挂到工具列表上——
+低频，而且占着 `tool_search` 的名额。坐标系要改走 Dashboard 的 `/api/bucket/{id}/anchor`；
+开窗浮梦本来就由 `breath()` 无参分支自动带出，跟 `night_fall` 这个工具无关，摘掉不影响。
 
 ---
 
@@ -100,10 +106,10 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 | 一大段、一天的总结 | `grow` |
 | 我自己的第一人称感受 | `hold(feel=True, source_bucket=…)` |
 | 待办、承诺 | `plan` |
-| 正在发生、明天还在（出差、赶工、身体不适） | `diary_write` |
+| 正在发生、明天还在（出差、赶工、身体不适） | `diary(action="write")` |
 | 不能动的核心准则 | `hold(pinned=True)` |
 | 关于我自己是什么 | `I` |
-| 要永远留下的话 | `letter_write` |
+| 要永远留下的话 | `letter(action="write")` |
 
 **diary 记「正在发生」，记忆桶记「已经改变」。** 同一天的事可以分别进两个地方 —— 「今天跟同事吵了一架」写 diary，「我发现她在冲突里总是先退让」写 hold。
 

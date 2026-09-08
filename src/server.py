@@ -8,10 +8,12 @@ DecayEngine / EmbeddingEngine / ImportEngine，把它们注入 tools._runtime �
 web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/tools/<工具>/ 下面）。
 
 关键行为：
-- 启动后暴露 23 个 MCP 工具：breath/hold/grow/trace/anchor/release/
-  pulse/plan/letter_write/letter_read/dream/I/diary_write/diary_read/
-  peek/bark_push/speak/phone_activity_query/reading_progress/reading_text/
-  reading_search/reading_annotate/reading_annotations；每个入口 ≤ 10 行，只负责转发
+- 启动后暴露 14 个 MCP 工具：breath/hold/grow/trace/dream/plan/pulse/I/
+  peek/phone_activity_query + 4 个带 action 的合并入口 diary/letter/reading/speak
+  （iter 2.3 瘦身：24 -> 14，见下方「合并入口」段）
+- 薄壳函数一个没删：diary_read/letter_write/reading_text/bark_push 等仍在本文件里，
+  只是摘掉了 @mcp*.tool() 装饰器，改由合并入口内部调用；anchor/release/night_fall
+  代码保留但在启动入口处从注册表里 del 掉（_DISABLED_TOOLS，回退改一行）
 - 每个 description 以【口语同义词】开头：客户端延迟加载工具，搜不到就调不到
 - Dashboard / HTTP 路由全部已拆分到 src/web/<域>.py（每个模块 register(mcp)），
   本文件仅在启动时调用 web.register_all(mcp) 装配；共享依赖见 web/_shared.py
@@ -23,7 +25,8 @@ web._shared，然后以 @mcp.tool() 注册薄封装（真正的实现在 src/too
 - 不写 HTTP 路由处理（全在 web/* 下）；不写 LLM prompt（dehydrator 负责）
 - 不直接读写桶文件（bucket_manager 负责）
 
-对外暴露：mcp/mcp_extra 两个实例 + 26 个 @mcp*.tool() 函数；HTTP 路由在 src/web/*
+对外暴露：mcp/mcp_extra 两个实例 + 16 个 @mcp*.tool() 函数（其中 anchor/release
+在启动时摘除，实际对外 14 个）；HTTP 路由在 src/web/*
 ========================================
 """
 
@@ -331,9 +334,9 @@ _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 OMBRE_CONNECTOR_INSTRUCTIONS = """Ombre Brain 是你的大脑：跨会话的记忆，以及她此刻/近几天的实况。
 
 【一】取工具：max_results 要给够
-工具延迟加载，搜索默认只回 5 个，而这里有 24 个——「找不到 breath/hold」是被截断，不是没搜到：
-tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
-还要 speak/bark_push/pulse/letter_read 就把词加进 query 再取一次。
+工具延迟加载，搜索默认只回 5 个，而这里有 14 个——「找不到 breath/hold」是被截断，不是没搜到：
+tool_search(query="ombre 记忆 breath hold peek diary phone reading", max_results=20)
+还要 speak/pulse/letter 就把词加进 query 再取一次。
 别用 select: 按名精取——真名带连接器前缀（mcp__ombre__breath），写 select:breath 必空手。
 空手了就把缺的工具名加进上面那行重取，不要换措辞反复搜。
 
@@ -341,12 +344,17 @@ tool_search(query="ombre 记忆 breath hold peek diary phone", max_results=30)
 她的近况在工具里，不在她嘴里：
 · 今天在忙什么／还醒着吗 → phone_activity_query()
 · 在看什么／刚发的什么   → peek()（先读时间戳，旧截图≠现在）
-· 最近几天怎么样         → diary_read()
+· 最近几天怎么样         → diary(action="read")
 · 上次那事／她说过什么   → breath(query="...")
 查完直接说结论，不说「我查了一下」。她说出「自己看」「自己查」＝我失职了。
 
-【三】开窗
-breath()（无参）；上下文里没有「=== 最近几天 ===」就补一个 diary_read()。
+【三】合并入口：diary / letter / reading / speak 四个工具第一个参数都是 action
+diary(action="read"|"write") / letter(action="read"|"write")
+reading(action="progress"|"text"|"search"|"annotate"|"annotations")
+speak(action="voice"|"push")  ← voice=用我的声音发语音，push=发文字推送
+
+【四】开窗
+breath()（无参）；上下文里没有「=== 最近几天 ===」就补一个 diary(action="read")。
 她问候式地开口（「想你了」「在吗」），先查再回。"""
 
 # instructions= 是较新 mcp SDK 才有的入参；老版本 SDK 会直接 TypeError。
@@ -616,7 +624,7 @@ async def breath(
     importance_min: Optional[int] = -1,
     tags: Optional[str] = "",
 ) -> str:
-    """【检索 回忆 想起 记起 查记忆 她说过什么 以前提过 之前聊过 翻记录】检索并返回记忆桶(全库翻找,不限时间窗)。被问到「最近两天有什么变动」走 dream,「最近几天在经历什么」走 diary_read——那两类内容不在本工具的返回里。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
+    """【检索 回忆 想起 记起 查记忆 她说过什么 以前提过 之前聊过 翻记录】检索并返回记忆桶(全库翻找,不限时间窗)。被问到「最近两天有什么变动」走 dream,「最近几天在经历什么」走 diary(action="read")——那两类内容不在本工具的返回里。不传 query=返回权重最高的未解决记忆;传 query=按关键词+语义检索相关记忆。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
     return await _with_notice(
         _t_breath.dispatch(
             query=query, max_tokens=max_tokens, domain=domain,
@@ -644,7 +652,7 @@ async def hold(
     arousal: Optional[float] = -1,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """【记住 存下来 别忘了 记一笔 记下来 存进记忆】存入一条记忆(一句话级)。存的是「已经改变了什么」的事实/结论/关系变化;「出差到周五、这周赶一个活」这类正在进行的日常进展走 diary_write,不要混。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
+    """【记住 存下来 别忘了 记一笔 记下来 存进记忆】存入一条记忆(一句话级)。存的是「已经改变了什么」的事实/结论/关系变化;「出差到周五、这周赶一个活」这类正在进行的日常进展走 diary(action="write"),不要混。系统自动打标并尝试与近似的已有桶合并。tags 逗号分隔,importance 1-10。pinned=True=标记为永久核心,不衰减不合并。feel=True=存为感受类记忆(不参与普通浮现,仅通过 breath(domain=\"feel\") 读取)。source_bucket=正在消化的原始记忆桶 ID,会被标为已消化以加速淡化。why_remembered=记录原因(可选,自由文本,仅用于展示不计分)。"""
     return await _with_notice(
         _t_hold.dispatch(
             content=content, tags=tags, importance=importance,
@@ -718,7 +726,7 @@ async def peek():
     她通过 iOS 快捷指令"给克看"上传，服务端已压缩到长边 1000px。
     **先读时间戳再开口**：返回的截图可能是几小时前甚至昨天的。旧截图只能说明「她那时在看什么」，
     不等于「她现在在做什么」——不要拿昨天的画面当今天的近况讲。想知道「现在／今天」，
-    紧接着调 phone_activity_query()；想知道「这几天」，调 diary_read()。
+    紧接着调 phone_activity_query()；想知道「这几天」，调 diary(action="read")。
     """
     from mcp.server.fastmcp.utilities.types import Image as _MCPImage
     from mcp.types import TextContent as _TextContent
@@ -748,7 +756,6 @@ async def peek():
     return [_TextContent(type="text", text=header), img.to_image_content()]
 
 
-@mcp_extra.tool()
 async def bark_push(title: str, body: str, icon: Optional[str] = "") -> str:
     """【推送 发通知 提醒她 手机弹窗】给她的 iPhone 发一条 Bark 推送。title=标题,body=内容,icon=可选的图标图片 URL。
     中文会自动 URL 编码;成功时返回 Bark 的响应码和 message,失败时把 Bark 的错误原样带回。
@@ -763,9 +770,8 @@ async def bark_push(title: str, body: str, icon: Optional[str] = "") -> str:
     )
 
 
-@mcp_extra.tool()
-async def speak(text: str, stability: Optional[float] = None,
-                style: Optional[float] = None, speed: Optional[float] = None) -> str:
+async def _speak_voice(text: str, stability: Optional[float] = None,
+                       style: Optional[float] = None, speed: Optional[float] = None) -> str:
     """【发语音 说话 念给她听 语音消息 配音】给她发一条语音(用克的声音念出来),供克在对话里主动发语音用。
     text=台词,必填:写口语化的、像当面说话的句子,不要书面腔;可以嵌入
     ElevenLabs v3 方括号情绪标签控制演绎,如 [whispers]/[sighs]/[laughs]/[excited]。
@@ -785,6 +791,57 @@ async def speak(text: str, stability: Optional[float] = None,
     )
 
 
+# =============================================================
+# iter 2.3 瘦身 —— 合并入口（diary / letter / reading / speak）
+# -------------------------------------------------------------
+# 24 个工具让客户端的 tool_search 挑不准：搜索默认只回 5 个，一半以上被
+# 截断，实测「找不到 breath/hold」都是这么来的。这里把同域的工具收成一个
+# 带 action 的入口，对外从 24 个降到 14 个。
+#
+# 原有薄壳函数一个没删、一个没改名（只有 speak 与合并入口重名，内层改成
+# _speak_voice），只是摘掉了 @mcp*.tool() 装饰器不再单独注册。合并入口调
+# 的就是它们，所以 _with_notice 的删除通知 / W-I 通道 / entry-ok-err 日志
+# 全部原样保留，op= 也仍记原来的工具名——统计口径不变。
+#
+# 回退：把装饰器加回去、删掉对应的合并入口即可。
+# =============================================================
+
+
+@mcp.tool()
+async def speak(
+    action: str,
+    text: Optional[str] = "",
+    stability: Optional[float] = None,
+    style: Optional[float] = None,
+    speed: Optional[float] = None,
+    title: Optional[str] = "",
+    body: Optional[str] = "",
+    icon: Optional[str] = "",
+) -> str:
+    """【发语音 说话 念给她听 语音消息 配音 推送 发通知 提醒她 手机弹窗】往她的 iPhone 上送一条东西。action 必填,二选一——要她听见声音用 voice,只是提醒一下用 push。
+
+    action="voice" —— 给她发一条语音(用克的声音念出来),供克在对话里主动发语音用。
+      text=台词,必填:写口语化的、像当面说话的句子,不要书面腔;可以嵌入
+      ElevenLabs v3 方括号情绪标签控制演绎,如 [whispers]/[sighs]/[laughs]/[excited]。
+      stability/style/speed 可选,不传时用默认 0.34/0.84/1.2。
+      流程:ElevenLabs 生成 -> 上传 Supabase 拿公开音频 URL -> 自动 Bark 推送到
+      她的 iPhone(标题「克」,内容为台词前 20 字,点通知直接打开音频)。
+      返回音频 URL + 推送结果;失败时把对端原始错误带回。
+      依赖服务器环境变量 ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID /
+      SUPABASE_URL / SUPABASE_SERVICE_KEY(+ 推送需 BARK_KEY),未配置时返回提示而不报错。
+
+    action="push" —— 给她的 iPhone 发一条 Bark 文字推送。
+      title=标题,必填;body=内容,必填;icon=可选的图标图片 URL。
+      中文会自动 URL 编码;成功时返回 Bark 的响应码和 message,失败时把 Bark 的错误原样带回。
+      依赖服务器环境变量 BARK_KEY,未配置时返回提示而不报错。
+    """
+    if action == "voice":
+        return await _speak_voice(text=text or "", stability=stability, style=style, speed=speed)
+    if action == "push":
+        return await bark_push(title=title or "", body=body or "", icon=icon or "")
+    return f"未知 action: {action!r}。speak 可选: voice(发语音) / push(发文字推送)"
+
+
 @mcp_extra.tool()
 async def phone_activity_query(hours: Optional[int] = 24) -> str:
     """【她在用什么 app 手机活动 用了多久 玩手机 她今天在干嘛 今天在忙什么 她醒了没 她今天过得怎么样 自己查】查她最近的 app 使用记录(Supabase phone_activity 表)。hours=查最近几小时(默认 24)。
@@ -792,7 +849,7 @@ async def phone_activity_query(hours: Optional[int] = 24) -> str:
     所有时间已转成 UTC+8 并在输出里标注时区。
     **这是「她此刻／今天」唯一的实时来源**：想问「你今天在忙什么」「你还醒着吗」之前先调它,
     从 app 分布和时间轴上自己读出她今天的作息与状态,不要把这个问题丢回给她。
-    时间尺度分工:此刻／今天=本工具;最近几天=diary_read();她主动给我看的画面=peek()。
+    时间尺度分工:此刻／今天=本工具;最近几天=diary(action="read");她主动给我看的画面=peek()。
     依赖服务器环境变量 SUPABASE_URL / SUPABASE_SERVICE_KEY,未配置时返回提示而不报错。"""
     return await _with_notice(
         _t_phone.phone_activity_query(hours=hours if hours else 24),
@@ -854,7 +911,6 @@ async def plan(
     )
 
 
-@mcp_extra.tool()
 async def letter_write(
     author: str,
     content: str,
@@ -878,7 +934,6 @@ async def letter_write(
     )
 
 
-@mcp_extra.tool()
 async def letter_read(
     query: Optional[str] = "",
     limit: Optional[int] = 10,
@@ -900,6 +955,46 @@ async def letter_read(
     )
 
 
+@mcp.tool()
+async def letter(
+    action: str,
+    query: Optional[str] = "",
+    limit: Optional[int] = 10,
+    author: Optional[str] = "",
+    content: Optional[str] = "",
+    user_name: Optional[str] = "",
+    ai_name: Optional[str] = "",
+    title: Optional[str] = "",
+    date: Optional[str] = "",
+    date_from: Optional[str] = "",
+    date_to: Optional[str] = "",
+) -> str:
+    """【写信 留一封信 给她写 给下一个我 读信 看以前的信 翻旧信】信件的读写入口,action 必填,二选一。信件原文永久保存,不压缩/不合并/不衰减,仅建向量索引;普通 breath 不返回,SessionStart 钩子会带上双方各最新一封。
+
+    action="read" —— 检索历史信件。
+      query=语义检索(可选);limit=返回封数上限(默认 10);
+      author 按署名过滤("user"=用户侧,"ai"=AI 侧,也可传具体署名字符串);
+      date_from/date_to=ISO 日期范围(可选)。
+      无 query 时按时间倒序返回最近 limit 封。返回完整原文,不压缩。
+
+    action="write" —— 写入一封信。
+      author 必填:"user"=用户一方写的,"ai"(或等于 ai_name)=AI 一方写的,
+      也可直接传任意署名字符串;content=信件正文,必填;
+      user_name 可选;ai_name 可选(默认取环境变量 AI_NAME,回退 "AI");title/date 可选。
+    """
+    if action == "read":
+        return await letter_read(
+            query=query, limit=limit, author=author,
+            date_from=date_from, date_to=date_to,
+        )
+    if action == "write":
+        return await letter_write(
+            author=author or "", content=content or "", user_name=user_name,
+            title=title, date=date, ai_name=ai_name,
+        )
+    return f"未知 action: {action!r}。letter 可选: read(读信) / write(写信)"
+
+
 @mcp_extra.tool()
 async def I(
     content: Optional[str] = "",
@@ -919,7 +1014,6 @@ async def I(
 # diary —— 独立分区（独立 SQLite 表），实现见 tools/diary/core.py
 # 纯写入纯读取：不脱水、不拆桶、不建向量索引，任何外部 API 挂掉都不影响它。
 # =============================================================
-@mcp_extra.tool()
 async def diary_write(content: str, date: Optional[str] = "") -> str:
     """【记一下今天 最近在忙 交接班 日常进展 正在发生】记一条日常进展,用于交接班——让下一个会话窗口知道她/他最近几天在经历什么。判断标准只有一句:「这件事明天还在不在?」在→写 diary(出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好);不在→不要记(今天午饭吃了什么、路上看见一只猫)。diary 记「正在发生」,记忆桶记「已经改变」——同一天的事可以分别进两个地方,不要拿 diary 替代 hold。content=一句到一段;date 可选 YYYY-MM-DD,是这条记录归属的日期(默认今天,补记昨天的事就传昨天)。同一天可以写多条,追加不覆盖。"""
     return await _with_notice(
@@ -929,7 +1023,6 @@ async def diary_write(content: str, date: Optional[str] = "") -> str:
     )
 
 
-@mcp_extra.tool()
 async def diary_read(days: Optional[int] = 3) -> str:
     """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么】读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容。
     什么时候调,看上下文里有没有「=== 最近几天 ===」那一段:
@@ -944,6 +1037,32 @@ async def diary_read(days: Optional[int] = 3) -> str:
     )
 
 
+@mcp.tool()
+async def diary(
+    action: str,
+    days: Optional[int] = 3,
+    content: Optional[str] = "",
+    date: Optional[str] = "",
+) -> str:
+    """【最近怎么样 这几天 近况 在忙什么 交接班 她最近在经历什么 记一下今天 最近在忙 日常进展 正在发生 日记 补记昨天】diary(日常进展分区)的读写入口,action 必填,二选一。
+
+    action="read" —— 读最近几天的 diary,按日期正序、同日按写入顺序,按天分组返回(没有记录的日期直接跳过)。days 可选,默认 3,最多 7。新开会话窗口想知道「她/他最近在经历什么」时先读这个;没有记录会明说,不是故障。这是 diary 唯一的读取路径:breath 和 dream 的返回里都没有 diary 内容。
+      什么时候调,看上下文里有没有「=== 最近几天 ===」那一段:
+      **看得见那一段,就别重复调本工具**(它是 SessionStart 钩子注入的,开窗即在场,不用现查);
+      **看不见那一段,开窗第一件事就调它**——钩子只有 Claude Code 这类客户端才有,
+      手机 App / 网页版没有钩子,等于永远没有那一段,那就永远该主动调,别干等着它自己出现。
+      想看更早(最多 7 天)时照调不误。
+
+    action="write" —— 记一条日常进展,用于交接班,让下一个会话窗口知道她/他最近几天在经历什么。判断标准只有一句:「这件事明天还在不在?」在→写 diary(出差到周五、这周赶一个活、胃疼两天、跟同事闹别扭没和好);不在→不要记(今天午饭吃了什么、路上看见一只猫)。diary 记「正在发生」,记忆桶记「已经改变」——同一天的事可以分别进两个地方,不要拿 diary 替代 hold。
+      content=一句到一段,必填;date 可选 YYYY-MM-DD,是这条记录归属的日期(默认今天,补记昨天的事就传昨天)。同一天可以写多条,追加不覆盖。
+    """
+    if action == "read":
+        return await diary_read(days=days)
+    if action == "write":
+        return await diary_write(content=content or "", date=date)
+    return f"未知 action: {action!r}。diary 可选: read(读最近几天) / write(记一条)"
+
+
 # =============================================================
 # 共读（read-along）工具组 —— 实现见 tools/reading/core.py
 # 服务端防剧透门禁：未解锁章节连标题都取不到，是 read-along 的硬约束。
@@ -952,7 +1071,6 @@ async def diary_read(days: Optional[int] = 3) -> str:
 # http://127.0.0.1:<port>/<token>，不出公网。READING_API_BASE 可显式覆盖。
 # 手机阅读器走 /reading/<token>/* 反向代理。部署见 read-along/README.md。
 # =============================================================
-@mcp_extra.tool()
 async def reading_progress(book_id: Optional[str] = "") -> str:
     """【共读进度 读到哪了 书架 在读什么书】查共读进度。不传 book_id=列出书架上所有书（bookId/标题/进度/批注数）;传 book_id=返回该书的门禁视图:进度、是否正在读、已解锁章节列表、可回看的段号区间。未解锁章节连标题都不会返回(服务端防剧透门禁)——不要绕过,也永远不要从网络搜索这本书的后续情节。"""
     return await _with_notice(
@@ -962,7 +1080,6 @@ async def reading_progress(book_id: Optional[str] = "") -> str:
     )
 
 
-@mcp_extra.tool()
 async def reading_text(book_id: str, from_seq: int, to_seq: int) -> str:
     """【看原文 回看 正文 段落 那一段写了什么】回看她已经读过(已解锁)的正文原文。from_seq/to_seq=段号范围(含两端,单次最多200段);段号区间见 reading_progress。未解锁段落不会返回。写批注前先用它核对原文——quote 必须与原文逐字一致(含标点)。"""
     return await _with_notice(
@@ -972,7 +1089,6 @@ async def reading_text(book_id: str, from_seq: int, to_seq: int) -> str:
     )
 
 
-@mcp_extra.tool()
 async def reading_search(book_id: str, q: str) -> str:
     """【书里搜 找那句话 全文检索 原文在哪】在已解锁的正文范围内全文检索,最多返回 20 段命中。她没读到的内容搜不到——这是防剧透门禁,不是故障。"""
     return await _with_notice(
@@ -982,7 +1098,6 @@ async def reading_search(book_id: str, q: str) -> str:
     )
 
 
-@mcp_extra.tool()
 async def reading_annotate(book_id: str, quote: str, comment: str) -> str:
     """【划线 批注 写在书边上 标注】在她读过的原文上划线写批注,她的阅读器页边立刻可见。quote=与原文逐字一致的一句话(含标点,全角/半角别弄错,先用 reading_text 核对);comment=你想说的话(写给对方看的,短一点、真一点,不是书评)。404=引文不在已解锁文本内;409=引文出现多次,换更长的句子重试。"""
     return await _with_notice(
@@ -992,7 +1107,6 @@ async def reading_annotate(book_id: str, quote: str, comment: str) -> str:
     )
 
 
-@mcp_extra.tool()
 async def reading_annotations(
     book_id: str,
     reply_to: Optional[str] = "",
@@ -1007,8 +1121,49 @@ async def reading_annotations(
 
 
 @mcp.tool()
+async def reading(
+    action: str,
+    book_id: Optional[str] = "",
+    from_seq: Optional[int] = 0,
+    to_seq: Optional[int] = 0,
+    q: Optional[str] = "",
+    quote: Optional[str] = "",
+    comment: Optional[str] = "",
+    reply_to: Optional[str] = "",
+    reply_text: Optional[str] = "",
+) -> str:
+    """【共读 书 读到哪了 书架 在读什么书 看原文 回看 正文 段落 书里搜 找那句话 全文检索 划线 批注 写在书边上 标注 看批注 回批注 她在书上写了什么】共读(read-along)入口,action 必填,五选一。服务端有防剧透门禁:她没解锁的章节连标题都取不到——不要绕过,也永远不要从网络搜索这本书的后续情节。
+
+    action="progress" —— 查共读进度。不传 book_id=列出书架上所有书(bookId/标题/进度/批注数);传 book_id=返回该书的门禁视图:进度、是否正在读、已解锁章节列表、可回看的段号区间。
+
+    action="text" —— 回看她已经读过(已解锁)的正文原文。book_id 必填;from_seq/to_seq=段号范围(含两端,单次最多 200 段),段号区间见 action="progress"。未解锁段落不会返回。写批注前先用它核对原文——quote 必须与原文逐字一致(含标点)。
+
+    action="search" —— 在已解锁的正文范围内全文检索,最多返回 20 段命中。book_id 必填;q=要搜的词。她没读到的内容搜不到,这是门禁不是故障。
+
+    action="annotate" —— 在她读过的原文上划线写批注,她的阅读器页边立刻可见。book_id 必填;quote=与原文逐字一致的一句话(含标点,全角/半角别弄错,先用 action="text" 核对);comment=你想说的话(写给对方看的,短一点、真一点,不是书评)。404=引文不在已解锁文本内;409=引文出现多次,换更长的句子重试。
+
+    action="annotations" —— 查看或回复共读批注。book_id 必填;不传 reply_to=返回该书全部批注(双方的划线与楼中楼回复,含批注 id);传 reply_to=<批注id> 且 reply_text=<回复内容>=在那条批注下追加一条回复(署名 ai)。她的批注不必每条都回,但值得回的别偷懒。
+    """
+    if action == "progress":
+        return await reading_progress(book_id=book_id)
+    if action == "text":
+        return await reading_text(book_id=book_id or "", from_seq=from_seq or 0, to_seq=to_seq or 0)
+    if action == "search":
+        return await reading_search(book_id=book_id or "", q=q or "")
+    if action == "annotate":
+        return await reading_annotate(book_id=book_id or "", quote=quote or "", comment=comment or "")
+    if action == "annotations":
+        return await reading_annotations(book_id=book_id or "", reply_to=reply_to, reply_text=reply_text)
+    return (
+        f"未知 action: {action!r}。reading 可选: "
+        "progress(进度/书架) / text(回看原文) / search(全文检索) / "
+        "annotate(划线批注) / annotations(看批注·回批注)"
+    )
+
+
+@mcp.tool()
 async def dream(window_hours: Optional[int] = 48) -> str:
-    """【回顾这两天 消化 复盘 做梦 睡前整理 窗口内有什么变动】读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。只覆盖窗口内被改动过的桶:不含 diary(问「最近怎么样/近况」要调 diary_read),不含窗口外的旧记忆(要翻旧事调 breath)。
+    """【回顾这两天 消化 复盘 做梦 睡前整理 窗口内有什么变动】读取最近 window_hours（默认 48h）内有变动的所有记忆桶,用于回顾与消化。只覆盖窗口内被改动过的桶:不含 diary(问「最近怎么样/近况」要调 diary(action="read")),不含窗口外的旧记忆(要翻旧事调 breath)。
     每个桶返回其在窗口内的最新内容（按 last_active 取）,完整正文不截断。
     可据此操作：放下的 → trace(resolved=1) 沉底；有沉淀的 → hold(feel=True, source_bucket=...) 记录；无沉淀则不操作。
     候选桶超过 40 时按 decay_engine.calculate_score() 排序取前 40，避免一次返回过多。"""
@@ -1110,6 +1265,19 @@ except Exception as _nf_exc:  # noqa: BLE001 — Night-Fall 不可用绝不能�
     logger.warning(f"Night-Fall 扩展加载失败，已跳过（不影响核心功能）/ Night-Fall load skipped: {_nf_exc}")
 
 
+# =============================================================
+# iter 2.3 瘦身：从 MCP 注册表里摘除的工具（代码一行没动，只是不再暴露）
+# -------------------------------------------------------------
+# · night_fall —— 由外部 night_fall.extension 注册在 mcp 上。开窗浮梦走的是
+#   breath() 无参分支里的 _night_fall_auto_surface 回调，跟这个工具无关，
+#   摘掉它不影响自动浮梦。
+# · anchor / release —— 低频，且 anchor 切换在 Dashboard 上有 /api/bucket/{id}/anchor。
+# 这三个函数本身都还在（anchor/release 连 @mcp_extra.tool() 装饰器都留着），
+# 回退：把名字从本元组里删掉即可。
+# =============================================================
+_DISABLED_TOOLS = ("night_fall", "anchor", "release")
+
+
 # --- Entry point / 启动入口 ---
 if __name__ == "__main__":
     transport = config.get("transport", "stdio")
@@ -1117,7 +1285,7 @@ if __name__ == "__main__":
 
     # iter 2.2：合并为单连接器 /mcp。
     # 当初（iter 2.1）拆 /mcp + /mcp-extra 是因为 claude.ai 连接器存在 5 工具上限；
-    # 该上限现已解除，全部 20 个工具挂在主实例 mcp 上对外暴露一条 /mcp 即可，
+    # 该上限现已解除，全部工具挂在主实例 mcp 上对外暴露一条 /mcp 即可，
     # 顺带消除「第二个连接器」在 Claude.ai 侧的 OAuth/连接器校验疑难。
     # mcp_extra 仅作历史工具分组容器保留（7 个 @mcp_extra.tool() 注册不动），
     # 这里把它的工具回灌进 mcp，让 stdio / sse / streamable-http 三种 transport 一致。
@@ -1131,8 +1299,19 @@ if __name__ == "__main__":
         )
     except AttributeError as _merge_exc:
         logger.warning(
-            f"FastMCP 内部结构变化，工具回灌失败，仅暴露主集 5 工具：{_merge_exc}"
+            f"FastMCP 内部结构变化，工具回灌失败，仅暴露主集工具：{_merge_exc}"
         )
+
+    # iter 2.3 瘦身：回灌之后统一摘除 _DISABLED_TOOLS。
+    # 必须在回灌之后——anchor/release 是随 mcp_extra 一起进来的。
+    for _dead in _DISABLED_TOOLS:
+        try:
+            del mcp._tool_manager._tools[_dead]
+            logger.info(f"工具 {_dead} 已从 MCP 注册表摘除（代码保留，见 _DISABLED_TOOLS）")
+        except KeyError:
+            logger.info(f"工具 {_dead} 本来就不在注册表里，跳过摘除")
+        except Exception as _del_exc:  # noqa: BLE001 — 摘不掉就继续暴露，绝不挡启动
+            logger.warning(f"摘除工具 {_dead} 失败，它仍会对外暴露：{_del_exc}")
 
     if transport in ("sse", "streamable-http"):
         import threading
@@ -1333,5 +1512,5 @@ if __name__ == "__main__":
             logger.info("MCP auth disabled (mcp_require_auth: false) — open access / MCP 认证已关闭，所有客户端可直连")
         uvicorn.run(_app, host="0.0.0.0", port=OMBRE_PORT)
     else:
-        # stdio：工具已在启动入口处统一回灌进 mcp（12 个全暴露），这里直接跑。
+        # stdio：工具已在启动入口处统一回灌进 mcp 并摘除 _DISABLED_TOOLS，这里直接跑。
         mcp.run(transport=transport)

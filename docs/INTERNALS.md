@@ -275,6 +275,30 @@ feel 桶自身：
 > `phone_activity_query`）同样注册在 `mcp_extra` 上、同样从 `/mcp` 暴露，只是不算进这份记忆核心契约。
 > 其中 diary 见 §3.12。
 
+> **瘦身（iter 2.3）：对外 24 → 14，函数一个没删。**
+> 工具是延迟加载的，客户端 `tool_search` 默认只回 5 个 —— 24 个工具里一多半会被截断，
+> 「找不到 breath / hold」就是这么来的。修法是收窄入口，不是删功能：
+>
+> | 合并入口 | 吃掉的原工具 | action |
+> |---|---|---|
+> | `diary` | `diary_read` / `diary_write` | `read` / `write` |
+> | `letter` | `letter_read` / `letter_write` | `read` / `write` |
+> | `reading` | `reading_progress` / `reading_text` / `reading_search` / `reading_annotate` / `reading_annotations` | `progress` / `text` / `search` / `annotate` / `annotations` |
+> | `speak` | `speak` / `bark_push` | `voice` / `push` |
+>
+> 原薄壳函数**全部保留在 `server.py` 里，签名一字未改**，只是摘掉了 `@mcp*.tool()` 装饰器，
+> 改由合并入口内部调用 —— 所以 `_with_notice` 的删除通知 / W-I 通道 / entry-ok-err 日志
+> 全都原样生效，`op=` 也仍记原来的工具名，`tool_stats` 口径不变。
+> 唯一改名的是 `speak`：与合并入口重名，内层改成 `_speak_voice`。
+>
+> 另有三个工具**代码保留、不再注册**：`night_fall` / `anchor` / `release`。
+> 名单在 `server.py` 的 `_DISABLED_TOOLS`，启动入口在副集回灌之后从
+> `mcp._tool_manager._tools` 里 `del` 掉（`anchor` / `release` 连装饰器都留着，
+> 回退＝把名字从这个元组里删掉）。`night_fall` 由外部包注册在 `mcp` 上，
+> 摘掉的只是工具本身；开窗自动浮梦走的是 `breath()` 无参分支里的
+> `_night_fall_auto_surface` 回调，不受影响。
+> `LegacyCompatibilityContract` 钉的是**函数级**遗留面，函数都还在，因此不受本次瘦身影响。
+
 ### 3.1 `breath` — 检索/浮现
 
 签名：`breath(query="", max_tokens=10000, domain="", valence=-1, arousal=-1, max_results=20, importance_min=-1, tags="")`
@@ -320,7 +344,7 @@ feel 桶自身：
 - `status` 仅接受 `active`/`resolved`/`abandoned`，主要用于 plan 桶。
 - `content="..."` 替换正文并重新生成 embedding。
 - `weight` 仅对 plan 桶有意义；`dont_surface` 切换主动遗忘标记；`why_remembered` 写「为什么留着这条」自由文本。
-- **不暴露 `anchor` 字段**：anchor 切换必须走 `anchor()` / `release()` 工具（受 24 上限保护）。
+- **不暴露 `anchor` 字段**：anchor 切换必须走 `anchor()` / `release()` 函数（受 24 上限保护）。iter 2.3 起这两个函数不再注册为 MCP 工具（见 §3 抬头），Dashboard 侧走 `POST /api/bucket/{id}/anchor`。
 
 (返回时会按 `resolved`/`digested` 状态变化追加人话提示，如「→ 已沉底，只在关键词触发时重新浮现」。)
 
