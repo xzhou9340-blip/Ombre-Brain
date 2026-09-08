@@ -161,7 +161,7 @@ async def surface_search(
             await rt.fire_webhook("breath", {"mode": "empty", "matches": 0})
         return (
             f"没有匹配到「{query}」相关的记忆。\n"
-            "可以换个关键词试试，或不带 query 看当下权重池；feel 用 breath(domain=\"feel\")，信件用 letter_read。"
+            "可以换个关键词试试，或不带 query 看当下权重池；feel 用 breath(domain=\"feel\")，信件用 letter(action=\"read\")。"
         )
 
     final_text = "\n---\n".join(results)

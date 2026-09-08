@@ -56,11 +56,11 @@ def _make_client() -> httpx.AsyncClient:
 async def bark_push(title: str, body: str, icon: str = "", url: str = "") -> str:
     key = _bark_key()
     if not key:
-        return "❌ bark_push 未配置：服务器缺少环境变量 BARK_KEY，推送功能不可用。"
+        return '❌ speak(action="push") 未配置：服务器缺少环境变量 BARK_KEY，推送功能不可用。'
     title = (title or "").strip()
     body = (body or "").strip()
     if not title and not body:
-        return "❌ bark_push 需要 title 或 body 至少一个非空。"
+        return '❌ speak(action="push") 需要 title 或 body 至少一个非空。'
     # quote(safe="") 连 "/" 一起编码，避免正文里的斜杠被当成路径分隔
     q_title = quote(title, safe="")
     q_body = quote(body, safe="")
