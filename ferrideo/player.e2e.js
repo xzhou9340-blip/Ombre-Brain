@@ -2,8 +2,9 @@
  * ferrideo/player.e2e.js — 播放器端到端（Chromium 驱动真页面）
  * ============================================================
  *
- * 跑法：node player.e2e.js <chromium 可执行文件> <一个能播的视频文件>
- * 例：node player.e2e.js /opt/pw-browsers/chromium-1194/chrome-linux/chrome /tmp/movie.webm
+ * 跑法：node player.e2e.js <chromium 可执行文件> [一个能播的视频文件]
+ * 不给视频就用浏览器的 MediaRecorder 现录一段（所以这个测试只需要 chromium，
+ * 不依赖 ffmpeg，也不依赖仓库里塞一个二进制视频）。
  *
  * 这一节的最后一步只能在 iPad Safari 上跑（见 docs/ipad-验收清单）。
  * 这个脚本负责在 iPad 之前把能自动化的都跑掉：真起 node 服务、真开浏览器、
@@ -28,7 +29,7 @@ const path = require('path');
 const http = require('http');
 
 const CHROME = process.argv[2];
-const MOVIE = process.argv[3];
+let MOVIE = process.argv[3];
 const TOKEN = 'e2e-token';
 const PORT = 18077;
 const GATE_PORT = 18078;
@@ -61,6 +62,45 @@ function req(url, { method = 'GET', body } = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 用浏览器自己的 MediaRecorder 录一段真视频当「影片」。
+ * 画面是动的条纹——不能是纯黑，否则会被播放器的黑帧检测判成「解码器不给帧」。
+ */
+async function recordClip(browser, out) {
+  const page = await (await browser.newContext()).newPage();
+  await page.setContent('<canvas id="c" width="320" height="240"></canvas>');
+  const b64 = await page.evaluate(() => new Promise((resolve) => {
+    const c = document.getElementById('c');
+    const ctx = c.getContext('2d');
+    let i = 0;
+    const draw = () => {
+      ctx.fillStyle = `hsl(${(i * 7) % 360} 60% 45%)`;
+      ctx.fillRect(0, 0, 320, 240);
+      ctx.fillStyle = '#fc0';
+      ctx.fillRect((i * 4) % 280, 90, 60, 60);
+      i += 1;
+    };
+    const timer = setInterval(draw, 50);
+    const rec = new MediaRecorder(c.captureStream(20), { mimeType: 'video/webm' });
+    const chunks = [];
+    rec.ondataavailable = (e) => chunks.push(e.data);
+    rec.onstop = async () => {
+      clearInterval(timer);
+      const buf = await new Blob(chunks, { type: 'video/webm' }).arrayBuffer();
+      let s = '';
+      const bytes = new Uint8Array(buf);
+      for (let k = 0; k < bytes.length; k += 1) s += String.fromCharCode(bytes[k]);
+      resolve(btoa(s));
+    };
+    rec.start();
+    setTimeout(() => rec.stop(), 6000);
+  }));
+  await page.context().close();
+  fs.writeFileSync(out, Buffer.from(b64, 'base64'));
+  console.log(`（现录了一段 ${Math.round(fs.statSync(out).size / 1024)} KB 的视频当影片）`);
+  return out;
+}
+
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ferrideo-e2e-'));
   const child = spawn('node', ['server.js'], {
@@ -83,6 +123,7 @@ async function main() {
   }
 
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--autoplay-policy=no-user-gesture-required'] });
+  if (!MOVIE) MOVIE = await recordClip(browser, path.join(dataDir, 'clip.webm'));
   const page = await (await browser.newContext({ viewport: { width: 1024, height: 768 } })).newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));

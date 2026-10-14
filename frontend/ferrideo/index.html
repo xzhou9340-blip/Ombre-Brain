@@ -93,13 +93,16 @@
     .danmaku { left: auto; right: 4vw; transition: opacity .4s; }
   }
 
-  /* 字幕 */
+  /* 字幕。控件条浮出来的时候要让开它——控件条在 DOM 里排在字幕之后，
+     会盖在字幕上面；iPad 横屏实测重叠一整行字的高度，iPhone 横屏更多。
+     --ctl-h 由 JS 按控件条实测高度写入，不写死数字。 */
   #subtitle {
     position: absolute; left: 0; right: 0; bottom: 8%; text-align: center;
     font-size: clamp(17px, 2.4vh, 28px); color: var(--sub);
     text-shadow: 0 1px 3px rgba(0,0,0,.9); padding: 0 6%; pointer-events: none;
-    white-space: pre-wrap;
+    white-space: pre-wrap; transition: bottom .2s;
   }
+  #screen.ctl #subtitle { bottom: calc(var(--ctl-h, 123px) + .6rem); }
   /* 对轴时画面中央那一句 */
   #alignPeek {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
@@ -118,11 +121,27 @@
   }
   #controls.on { opacity: 1; pointer-events: auto; }
   #controls .row { gap: .8rem; }
+  #controls .row2 { margin-top: .7rem; }
   #seek { flex: 1; -webkit-appearance: none; appearance: none; height: 2px; background: #4A4750; border-radius: 2px; }
   #seek::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); }
   #clock { font-variant-numeric: tabular-nums; font-size: .85rem; color: var(--ink); min-width: 10.5em; text-align: right; }
   .ctl { padding: .5rem .8rem; font-size: .85rem; background: rgba(20,20,24,.7); }
   #offsetBox { font-variant-numeric: tabular-nums; font-size: .8rem; color: var(--ink-dim); min-width: 4em; text-align: center; }
+
+  /* 窄屏、矮屏（iPhone 横着拿就是这个尺寸——横屏本来就是看片的姿势）。
+     不收紧的话控件条要吃掉三分之一屏高。竖屏不保证好看，但也不让它溢出。 */
+  @media (max-height: 460px), (max-width: 500px) {
+    #controls { padding: .55rem .7rem calc(.55rem + env(safe-area-inset-bottom)); }
+    #controls .row { gap: .45rem; }
+    #controls .row2 { margin-top: .45rem; }
+    .ctl { padding: .32rem .55rem; font-size: .76rem; }
+    #clock { font-size: .72rem; min-width: 9.2em; }
+    #offsetBox { font-size: .7rem; min-width: 3.2em; }
+  }
+  /* 更窄（iPhone 竖屏）：时间串换成只显示当前时间，省一行 */
+  @media (max-width: 420px) {
+    #clock { min-width: 0; font-size: .7rem; }
+  }
 
   /* 右下角连接点 */
   #dot { position: absolute; right: 10px; bottom: 10px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); opacity: .55; }
@@ -225,7 +244,7 @@
       <input type="range" id="seek" min="0" max="1000" value="0">
       <span id="clock">00:00:00 / 00:00:00</span>
     </div>
-    <div class="row" style="margin-top:.7rem">
+    <div class="row row2">
       <button class="ctl" id="quote">记下这句</button>
       <button class="ctl" id="sayBtn">说一句</button>
       <span style="flex:1"></span>
@@ -566,9 +585,17 @@ $('seek').oninput = (e) => { if (video.duration) video.currentTime = (e.target.v
 // 轻点画面：唤出控件；播放中 3 秒无操作又什么都不剩
 let hideTimer = null;
 function bumpControls() {
-  $('controls').classList.add('on');
+  const ctl = $('controls');
+  ctl.classList.add('on');
+  // 字幕要按控件条的**实测**高度让开：这个高度随屏幕尺寸和换行情况变，写死就会错
+  $('screen').style.setProperty('--ctl-h', ctl.offsetHeight + 'px');
+  $('screen').classList.add('ctl');
   clearTimeout(hideTimer);
-  hideTimer = setTimeout(() => { if (!video.paused) $('controls').classList.remove('on'); }, CONTROLS_HIDE_MS);
+  hideTimer = setTimeout(() => {
+    if (video.paused) return;          // 暂停时控件留着，字幕也继续让着
+    ctl.classList.remove('on');
+    $('screen').classList.remove('ctl');
+  }, CONTROLS_HIDE_MS);
 }
 $('screen').addEventListener('click', (e) => {
   if (e.target.closest('#controls')) { bumpControls(); return; }
@@ -590,6 +617,7 @@ $('exit').onclick = async () => {
   releaseWakeLock();
   $('danmakuLayer').innerHTML = '';
   $('subtitle').textContent = '';
+  $('screen').classList.remove('ctl');
   S.roomId = null;
   $('start').disabled = false;
   show('lobby');
