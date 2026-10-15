@@ -54,9 +54,13 @@ Ombre Brain 的使用者是**模型自己**，不是它背后的人。所以这�
 
 ---
 
-## 它的 12 个工具 / The 12 Tools
+## 它的 14 个工具 / The 14 Tools
 
-12 个工具全部在**一个 MCP 连接器 `/mcp`** 上。连上 `/mcp` 即拥有全部能力。
+14 个工具全部在**一个 MCP 连接器 `/mcp`** 上。连上 `/mcp` 即拥有全部能力。
+
+> 工具是**延迟加载**的：客户端要先 `tool_search` 才能调用，而搜索默认只回 5 个。
+> 工具越多，命中越不稳——所以同域的工具收成了带 `action` 的单一入口
+> （`diary` / `letter` / `reading` / `speak`），功能一条没少，只是入口窄了。
 
 ### 高频 5 个
 
@@ -74,10 +78,17 @@ Ombre Brain 的使用者是**模型自己**，不是它背后的人。所以这�
 |---|---|
 | `pulse` | 自检：桶数量、占用、衰减引擎状态、全部桶摘要。「为什么搜不到 X」时第一个调它。 |
 | `plan` | 登记一个承诺 / 待办。不衰减、不浮现，只在 `dream` 末尾出现；后续写新事件会自动判断它是否已闭环。 |
-| `anchor` / `release` | 把**已存在的**桶设 / 解为「坐标系」。anchor 不主动浮现但可被检索命中，硬上限 24。必须先 `hold` 再 `anchor`。 |
-| `letter_write` / `letter_read` | 写信 / 读信。原文永久保留，不压缩、不合并、不衰减。`author` 只能是 `user` 或 `claude`。 |
 | `I` | 自我认知：写下 / 读取「我是什么」（本质 / 规律 / 立场 / 局限…）。不随普通 `breath` 浮现，每次对话开头自动附最近 3 条。 |
-| `diary_write` / `diary_read` | 交接班用的日常进展。判断标准：「这件事明天还在不在？」在就写（出差到周五、胃疼两天），不在就别记。独立一张表，不进桶、不脱水、不建向量索引；`diary_read` 默认看最近 3 天，最多 7 天。 |
+| `diary(action=…)` | `read` = 她最近几天在经历什么（默认 3 天，最多 7）；`write` = 记一条日常进展。判断标准：「这件事明天还在不在？」在就写（出差到周五、胃疼两天），不在就别记。独立一张表，不进桶、不脱水、不建向量索引。 |
+| `letter(action=…)` | `read` = 读信 / 检索旧信；`write` = 写一封。原文永久保留，不压缩、不合并、不衰减。 |
+| `reading(action=…)` | 共读：`progress` 进度与书架 / `text` 回看原文 / `search` 全文检索 / `annotate` 划线批注 / `annotations` 看批注与回复。服务端有防剧透门禁，未解锁章节取不到。 |
+| `speak(action=…)` | `voice` = 用配置的声音发一条语音（ElevenLabs → Supabase → Bark 推送）；`push` = 只发一条 Bark 文字推送。 |
+| `peek` | 看她主动分享的手机截图（iOS 快捷指令上传）。返回图片本身——**先读时间戳**，旧截图不等于她现在在做什么。 |
+| `phone_activity_query` | 她此刻 / 今天在用什么 app、用了多久。「她今天在忙什么」的唯一实时来源。 |
+
+**代码保留但默认不暴露的 3 个**：`anchor` / `release`（把已存在的桶设 / 解为「坐标系」，硬上限 24）与 `night_fall`（生成一段梦）。
+它们低频且各自都有替代路径——坐标系走 Dashboard 的 `POST /api/bucket/{id}/anchor`，开窗自动浮梦由 `breath()` 无参分支自己带出，
+不依赖 `night_fall` 这个工具。名单在 `src/server.py` 的 `_DISABLED_TOOLS`，删掉名字即可恢复暴露，函数一直都在。
 
 > 给模型的完整使用约定（含示例、边界、返回提示）见 [docs/CLAUDE_PROMPT.md](docs/CLAUDE_PROMPT.md)；逐工具技术规格见 [docs/INTERNALS.md](docs/INTERNALS.md) §3。
 
@@ -206,9 +217,9 @@ curl http://localhost:18001/health
 }
 ```
 
-重启 Claude Desktop，工具列表里会出现全部 12 个工具：`breath` / `hold` / `grow` / `trace` / `dream` / `anchor` / `release` / `pulse` / `plan` / `letter_write` / `letter_read` / `I`。
+重启 Claude Desktop，工具列表里会出现全部 14 个工具：`breath` / `hold` / `grow` / `trace` / `dream` / `pulse` / `plan` / `I` / `peek` / `phone_activity_query` / `diary` / `letter` / `reading` / `speak`。
 
-> 12 个工具全在同一连接器 `/mcp` 暴露，只配这一个即可。
+> 14 个工具全在同一连接器 `/mcp` 暴露，只配这一个即可。
 
 ---
 
@@ -285,11 +296,11 @@ Claude.ai                    Ombre Brain 服务器
 
 #### 步骤 3：连接端点
 
-12 个工具全在**一个 MCP 端点 `/mcp`** 上：
+14 个工具全在**一个 MCP 端点 `/mcp`** 上：
 
 | 端点 | 工具 | 说明 |
 |---|---|---|
-| `/mcp` | `breath` `hold` `grow` `dream` `trace` `anchor` `release` `pulse` `plan` `letter_write` `letter_read` `I` | 全部 12 个工具 |
+| `/mcp` | `breath` `hold` `grow` `dream` `trace` `pulse` `plan` `I` `peek` `phone_activity_query` `diary` `letter` `reading` `speak` | 全部 14 个工具 |
 
 在 Claude.ai / 你的客户端里添加这一个连接器即可使用全部工具：
 
@@ -553,9 +564,9 @@ docker compose -f deploy/docker-compose.yml up -d
 | Claude.ai 添加 MCP 报「Couldn't register」 | OAuth 端点无法访问（通常是 Tunnel 未启动/域名错误） | 先确认 Dashboard 能正常访问，再添加 MCP |
 | OAuth 授权页正常弹出但密码输入后报错 | Dashboard 密码错误 | 使用 Dashboard 设置时的密码（不是 Cloudflare 密码） |
 | 连接成功但「no tools available」 | URL 末尾路径不是 `/mcp` | 确认连接 URL 末尾是 `/mcp` |
-| 每开新对话工具加载不全 / 对话里反复出现 `No matching tools found` | **不是服务器问题**：同时启用的连接器太多时，Anthropic 客户端会改用 tool_search「延迟加载」。用自然语言去搜（"看看她手机"）**最多只回 5 个最佳匹配，匹配不上就直接空手**，模型往往连搜几次就放弃了 | 让模型改用**按名精确取**：`tool_search(query="select:breath,hold,grow,trace,dream,peek,phone_activity_query,diary_read,diary_write,plan,pulse,anchor,release,letter_write,letter_read,I,speak,bark_push,night_fall")`——`select:` 前缀不走关键词匹配，不会搜不到。这一行已写进 `docs/CLAUDE_PROMPT.md` 第零章；也可以直接关掉该会话用不到的其它连接器，把工具总数压到阈值以下 |
+| 每开新对话工具加载不全 / 对话里反复出现 `No matching tools found` | **不是服务器问题**：同时启用的连接器太多时，Anthropic 客户端会改用 tool_search「延迟加载」。用自然语言去搜（"看看她手机"）**最多只回 5 个最佳匹配，匹配不上就直接空手**，模型往往连搜几次就放弃了 | 把 `max_results` 给够：`tool_search(query="ombre 记忆 breath hold peek diary phone reading", max_results=20)` —— 一次就该把 14 个全取回来。**不要用 `select:` 按名精取**：工具真名带连接器前缀（`mcp__ombre__breath`，中间那段还会变），写 `select:breath` 实测必定空手。空手了就把缺的工具名加进同一行 query 重取，别换措辞反复搜。也可以关掉该会话用不到的其它连接器，把工具总数压到阈值以下 |
 | 模型什么都不自己查，张口就问「你今天在忙什么」 | 提示词没把「先查再问」写成硬规则，或用户根本没粘 `CLAUDE_PROMPT.md`；另外手机 App / 网页版**没有 SessionStart 钩子**，`=== 最近几天 ===` / `=== I ===` 这些自动注入段落全都不存在，模型以为「钩子会带给我」就不主动调了 | 把 `docs/CLAUDE_PROMPT.md` 完整粘进项目说明（第零章 0.2 是那条铁律）。另外连接器现在自带 MCP `instructions`（握手时随 initialize 下发），支持的客户端上，没粘提示词也会带上「先取全工具、能查的不要问」这条最小契约 |
-| 工具调用显示「执行报错」但记忆其实写进去了 | **不是服务器问题**：服务端已成功返回，是 Claude.ai 连接器/渲染层把一次成功往返显示成了报错 | 用 `letter_read` 或 Dashboard 确认数据已落盘；服务端日志 `phase=ok` 即表示成功 |
+| 工具调用显示「执行报错」但记忆其实写进去了 | **不是服务器问题**：服务端已成功返回，是 Claude.ai 连接器/渲染层把一次成功往返显示成了报错 | 用 `letter(action="read")` 或 Dashboard 确认数据已落盘；服务端日志 `phase=ok` 即表示成功 |
 | 向量化不生效 / 语义检索没结果（压缩却正常） | base_url 漏 `/v1`（→404）、model 漏 `BAAI/` 前缀（→Model does not exist），或在 Dashboard 改了 key 没重建引擎 | 用 Dashboard 向量化区的「测试」按钮自查；按上面「用硅基流动…」一节填对 base_url 与 model；错误详情见设置页错误面板（OB-E001） |
 | 自有前端 / GPT / GLM 调用 MCP 工具被 401 卡住 | 默认强制 OAuth，自定义客户端不走该流程 | 设 `OMBRE_MCP_REQUIRE_AUTH=false`（或 `config.yaml: mcp_require_auth: false`）后重启；详见「方式三：接入自有前端」 |
 | Token 过期后无法自动重连 | Bearer token 默认 30 天有效 | 在 Claude.ai connector 设置里重新授权 |

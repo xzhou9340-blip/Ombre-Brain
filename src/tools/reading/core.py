@@ -102,7 +102,7 @@ def _check_book_id(book_id: str) -> Optional[str]:
     if not book_id or not _BOOK_ID_RE.match(book_id):
         return (
             f"bookId 不合法：{book_id!r}（只允许字母/数字/下划线/连字符）。"
-            f"先用 reading_progress 不带参数列出书架，拿到正确的 bookId。"
+            f'先用 reading(action="progress") 不带 book_id 列出书架，拿到正确的 bookId。'
         )
     return None
 
@@ -128,7 +128,7 @@ async def progress(book_id: Optional[str] = "") -> str:
     except Exception as e:
         return _conn_help(e)
     if status == 404:
-        return f"没有 bookId={book_id} 这本书。用 reading_progress 不带参数看看书架上有什么。"
+        return f'没有 bookId={book_id} 这本书。用 reading(action="progress") 不带 book_id 看看书架上有什么。'
     if status != 200:
         return f"查询进度失败（HTTP {status}）：{data.get('error', data)}"
 
@@ -173,7 +173,7 @@ async def _list_books() -> str:
             f"{b.get('chapterCount', '?')} 章 / {b.get('totalChars', '?')} 字，"
             f"批注 {b.get('annotationCount', 0)} 条"
         )
-    lines.append("用 reading_progress(book_id=...) 看某本书的已解锁章节与可回看段号。")
+    lines.append('用 reading(action="progress", book_id=...) 看某本书的已解锁章节与可回看段号。')
     return "\n".join(lines)
 
 
@@ -189,7 +189,7 @@ async def text(book_id: str, from_seq: int, to_seq: int) -> str:
         from_seq = int(from_seq)
         to_seq = int(to_seq)
     except (TypeError, ValueError):
-        return "from_seq/to_seq 需要是整数段号（见 reading_progress 返回的段号区间）。"
+        return 'from_seq/to_seq 需要是整数段号（见 reading(action="progress") 返回的段号区间）。'
     if to_seq < from_seq:
         return "to_seq 不能小于 from_seq。"
     if to_seq - from_seq > _TEXT_RANGE_MAX:
@@ -257,7 +257,7 @@ async def annotate(book_id: str, quote: str, comment: str) -> str:
     quote = (quote or "").strip()
     comment = (comment or "").strip()
     if not quote:
-        return "quote 不能为空：先用 reading_text 找到想划的那句原文，逐字复制（含标点）。"
+        return 'quote 不能为空：先用 reading(action="text") 找到想划的那句原文，逐字复制（含标点）。'
     if not comment:
         return "comment 不能为空：写点你想对她说的话。"
     try:
@@ -287,7 +287,7 @@ async def annotate(book_id: str, quote: str, comment: str) -> str:
         return (
             f"没找到这句引文：{data.get('error', '')}\n"
             f"两个常见原因：① quote 与原文不是逐字一致（全角/半角标点最容易错）——"
-            f"先用 reading_text 回看原文，复制原文再批；"
+            f'先用 reading(action="text") 回看原文，复制原文再批；'
             f"② 想批的内容她还没读到（未解锁的内容不能批，这是设计，不是故障）。"
         )
     return f"批注失败（HTTP {status}）：{data.get('error', data)}"
@@ -347,9 +347,9 @@ async def annotations(book_id: str, reply_to: Optional[str] = "",
         return f"查询批注失败（HTTP {status}）：{data.get('error', data)}"
     annos = data.get("annotations") or []
     if not annos:
-        return "这本书还没有任何批注。读到有感触的地方，用 reading_annotate 划一句。"
+        return '这本书还没有任何批注。读到有感触的地方，用 reading(action="annotate") 划一句。'
     lines = [f"=== 批注（{len(annos)} 条）==="]
     for a in sorted(annos, key=lambda x: x.get("seq") or 0):
         lines.extend(_fmt_annotation(a))
-    lines.append("回复某条：reading_annotations(book_id, reply_to=<id>, reply_text=<你的话>)。")
+    lines.append('回复某条：reading(action="annotations", book_id, reply_to=<id>, reply_text=<你的话>)。')
     return "\n".join(lines)

@@ -106,7 +106,7 @@ def _check_room_id(room_id: str) -> Optional[str]:
 def _room_404(room_id: str) -> str:
     return (
         f"没有 {room_id} 这个房间——可能她还没开场，或者房间过期了（12 小时无心跳即回收）。"
-        f"要开新的一场就用 ferrideo_create_room。"
+        f'要开新的一场就用 ferrideo(action="create_room")。'
     )
 
 
@@ -266,7 +266,7 @@ async def request_frame(room_id: str) -> str:
         return _room_404(rid)
     if status not in (200, 202):
         return f"要帧失败（HTTP {status}）：{data.get('error', data)}"
-    return data.get("tip") or "已经跟播放器要了一帧，等 3-5 秒后用 ferrideo_get_context 带 includeFrame 取。"
+    return data.get("tip") or '已经跟播放器要了一帧，等 3-5 秒后用 ferrideo(action="context", include_frame=True) 取。'
 
 
 async def add_note(room_id: str, text: str) -> str:

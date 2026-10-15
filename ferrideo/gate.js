@@ -102,7 +102,7 @@ function buildContext(room, includeFrame) {
     out.nextLineExists = false;
     out.hints.push(
       '这一场没有字幕轨（她没传字幕，或者字幕是烧死在画面上的硬字幕）。' +
-      '要知道台词请用 ferrideo_request_frame 抓一帧看画面。',
+      '要知道台词请用 ferrideo(action="frame") 抓一帧看画面。',
     );
   } else {
     out.subtitleMode = 'track';
@@ -139,11 +139,11 @@ function buildContext(room, includeFrame) {
       out.frameAt = hms(got.meta.positionMs);
       const ageSec = Math.round((Date.now() - new Date(got.meta.createdAt).getTime()) / 1000);
       out.frameAgeSeconds = ageSec;
-      if (ageSec > 60) out.hints.push(`这帧是 ${ageSec} 秒前的，不是此刻的画面。要新的就再调一次 ferrideo_request_frame。`);
+      if (ageSec > 60) out.hints.push(`这帧是 ${ageSec} 秒前的，不是此刻的画面。要新的就再调一次 ferrideo(action="frame")。`);
     } else if (room.frameRequest) {
       out.hints.push('已经跟播放器要了一帧，但还没送上来——再等几秒重新调一次。');
     } else {
-      out.hints.push('这个房间还没有任何一帧。先调 ferrideo_request_frame，等 3-5 秒再来取。');
+      out.hints.push('这个房间还没有任何一帧。先调 ferrideo(action="frame")，等 3-5 秒再来取。');
     }
   }
   return out;
@@ -205,7 +205,7 @@ function createGateApp({ token }) {
     return gated(req, res, next);
   });
 
-  // 建房（ferrideo_create_room）
+  // 建房（action="create_room"）
   gated.post('/api/gate/rooms', (req, res) => {
     try {
       const room = store.createRoom((req.body || {}).title);
@@ -219,17 +219,17 @@ function createGateApp({ token }) {
     }
   });
 
-  // 现在放到哪了、这一句是什么（ferrideo_get_context）
+  // 现在放到哪了、这一句是什么（action="context"）
   gated.get('/api/gate/rooms/:id/context', withRoom, (req, res) => {
     const raw = req.query.includeFrame;
     const includeFrame = raw === undefined ? undefined : ['1', 'true', 'yes'].includes(String(raw).toLowerCase());
     return res.json(buildContext(req.room, includeFrame));
   });
 
-  // 房间全貌（ferrideo_get_room）
+  // 房间全貌（action="room"）
   gated.get('/api/gate/rooms/:id/room', withRoom, (req, res) => res.json(buildRoomOverview(req.room)));
 
-  // 发弹幕（ferrideo_send_danmaku）
+  // 发弹幕（action="danmaku"）
   gated.post('/api/gate/rooms/:id/danmaku', withRoom, (req, res) => {
     try {
       const { text, author } = req.body || {};
@@ -240,17 +240,17 @@ function createGateApp({ token }) {
     }
   });
 
-  // 要一帧（ferrideo_request_frame）
+  // 要一帧（action="frame"）
   gated.post('/api/gate/rooms/:id/frame-request', withRoom, (req, res) => {
     const fr = store.requestFrame(req.room, (req.body || {}).requestedBy);
     return res.status(202).json({
       ok: true,
       requestId: fr.id,
-      tip: '已经跟播放器要了一帧，等 3-5 秒后用 ferrideo_get_context 带 includeFrame 取。',
+      tip: '已经跟播放器要了一帧，等 3-5 秒后用 ferrideo(action="context", include_frame=True) 取。',
     });
   });
 
-  // 记一笔（ferrideo_add_note）
+  // 记一笔（action="note"）
   gated.post('/api/gate/rooms/:id/note', withRoom, (req, res) => {
     try {
       const n = store.addNote(req.room, { text: (req.body || {}).text, source: 'ai' });
@@ -260,7 +260,7 @@ function createGateApp({ token }) {
     }
   });
 
-  // 票根（ferrideo_generate_ticket）。存进长期记忆是 python 侧的事，这里只生成
+  // 票根（action="ticket"）。存进长期记忆是 python 侧的事，这里只生成
   gated.post('/api/gate/rooms/:id/ticket', withRoom, (req, res) => {
     const { mood, note } = req.body || {};
     return res.json(buildTicket(req.room, { mood, note }));

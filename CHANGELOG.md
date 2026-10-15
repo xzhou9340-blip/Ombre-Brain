@@ -4,6 +4,24 @@
 
 ## Unreleased
 
+### 变更 / Changed（工具面，**破坏性**）
+
+- **对外工具从 24 个收到 14 个。** 起因是工具延迟加载：客户端 `tool_search` 默认只回 5 个，24 个工具里一多半会被截断，实测「找不到 breath / hold」全都是被截断而不是没搜到（`breath` 一次搜了八轮才拿到）。搜索空间越大，命中越不稳，所以把同域工具收成带 `action` 的单一入口：
+  - `diary(action="read"|"write")` ← `diary_read` / `diary_write`
+  - `letter(action="read"|"write")` ← `letter_read` / `letter_write`
+  - `reading(action="progress"|"text"|"search"|"annotate"|"annotations")` ← `reading_*` 五个
+  - `speak(action="voice"|"push")` ← `speak` / `bark_push`
+
+  **功能一条没删**：原薄壳函数全部留在 `src/server.py` 里、签名一字未改，只是摘掉了 `@mcp*.tool()` 装饰器改由合并入口内部调用。所以 `_with_notice` 的删除通知、W/I 提示通道、`entry/ok/err` 三段日志全部原样生效，`op=` 也仍记原来的工具名——`tool_stats` 的统计口径不变。唯一改名的是 `speak`：与合并入口重名，内层改成 `_speak_voice`。
+- **`night_fall` / `anchor` / `release` 代码保留但不再注册为 MCP 工具。** 名单在 `src/server.py` 的 `_DISABLED_TOOLS`，启动入口在副集回灌之后从 `mcp._tool_manager._tools` 里 `del`（`anchor` / `release` 连装饰器都留着），删掉名字即可恢复。理由：三者都低频且各有替代路径——坐标系走 Dashboard `POST /api/bucket/{id}/anchor`（`anchor` 的效果与 `trace(dont_surface=1)` 高度重叠，后者一步就能做到，而 `anchor` 没有创建快捷键、必须先 `hold` 再钉）；开窗自动浮梦走的是 `breath()` 无参分支里的 `_night_fall_auto_surface` 回调，与 `night_fall` 这个工具无关，摘掉不影响做梦。
+- **破坏性影响**：`diary_read()` / `letter_write()` / `reading_text()` / `bark_push()` 等旧工具名对客户端不再存在。仓库内的指路已全部改成 `action` 写法（仍暴露工具的 description、连接器 `instructions`、`docs/CLAUDE_PROMPT.md`、`docs/INTERNALS.md` §3、README）。**贴在 claude.ai 项目说明里的 `CLAUDE_PROMPT.md` 是仓库外的副本，需要重新粘一次**，否则模型会照着旧工具名调。
+- README 的工具章节此前一直停在「12 个工具」（`peek` / `diary` / `reading` / `speak` / `phone_activity_query` 加进来之后没同步），本次一并补全为准确的 14 个。troubleshooting 里那条「用 `select:` 按名精取」是已被推翻的旧结论（真名带 `mcp__ombre__` 前缀，`select:breath` 实测必空手），改成 `max_results` 给够。
+
+### 测试 / Tests
+
+- `tests/test_tool_description_keywords.py`：原先断言「注册工具 ≥ 23 个」，改成**钉住名单本身**（只数个数既拦不住误删、也拦不住误加回去），并逐个钉住被合并工具的口语同义词有没有在合并入口的【】前缀里活下来——少一个词，用户那句话就再也搜不到对应的工具。
+- 新增 `tests/test_tool_merge_routing.py`（26 个）：真 `import server` 跑一遍，钉住对外正好 14 个、每条 `action` 落到原薄壳上、参数逐字透传（断言写成完整 kwargs 字典而非「包含某个键」——合并入口的参数是所有 action 的并集，最容易犯的错就是把 B 的参数漏传给 A）、未知 `action` 有明确回话。描述写对了但路由接错，只有这一份能拦住。
+
 ### 修复 / Fixed
 
 - **`mcp>=1.0.0` 会装出 mcp 2.0.0，容器起不来**：mcp 2.0.0 把 `mcp.server.fastmcp` 挪走了，`src/server.py` 开头的 `from mcp.server.fastmcp import FastMCP` 直接 `ModuleNotFoundError`。这不是潜在风险，是今天任何一次干净重建都会踩到的既有地雷（实测 `pip install "mcp>=1.0.0"` → 2.0.0 → import 失败）。requirements 收紧为 `mcp>=1.9,<2`。

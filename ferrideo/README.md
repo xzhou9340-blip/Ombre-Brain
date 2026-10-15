@@ -5,8 +5,7 @@
 
 **部署形态：不单独建服务**——由 `src/web/ferrideo_bridge.py` 在 ombre-brain
 启动时以 node 子进程方式拉起，与 ombre 和 read-along 跑在同一个 Render 服务里、
-共用同一块持久盘，零新增费用。配套 MCP 工具是 `src/tools/ferrideo/` 的 7 个
-`ferrideo_*`。
+共用同一块持久盘，零新增费用。配套 MCP 工具是 `src/tools/ferrideo/`，对外是一个带 `action` 的 `ferrideo` 入口。
 
 > **不提供任何影视资源。不上传、不存储、不分发任何视频文件。**
 > 视频只存在于用户自己的设备上（浏览器里的 `blob:` URL，退出即释放）。
@@ -35,7 +34,7 @@ Cloudflare Tunnel 域名）。
 
 **第一次在 iPad 上打开之后**，用 Safari 的「分享 → 添加到主屏幕」存成图标，
 以后点图标就进。同时后端会从那次请求里学到对外域名并记在盘上，之后
-`ferrideo_create_room` 就能直接回一个能点开的完整地址，不用再拼。
+`ferrideo(action="create_room")` 就能直接回一个能点开的完整地址，不用再拼。
 
 真机验收照着 [`docs/iPad验收清单.md`](docs/iPad验收清单.md) 走一遍。
 
@@ -91,7 +90,7 @@ Render Web Service (ombre-brain, Docker)               ▼
 
 - ferrideo 整个目录上限 **100 MB**；超了从最旧的房间开始清帧目录
 - 写帧前查**整盘剩余**，低于 **200 MB** 硬停：不写帧、记 `error` 级日志、
-  `ferrideo_get_context` 返回「磁盘空间不足」
+  `ferrideo(action="context")` 返回「磁盘空间不足」
 
 这条预检保护的不是 ferrideo 自己，是 **ombre 的热更新和回滚路径**——`_app/`
 代码副本也在这块盘上，盘满了坏的不是观影，是 ombre 改不动也回滚不了。
@@ -105,17 +104,21 @@ Render Web Service (ombre-brain, Docker)               ▼
 
 ---
 
-## 七个 MCP 工具
+## MCP 接口：一个 `ferrideo` 工具，七条 action
 
-| 工具 | 做什么 |
+照 iter 2.3 瘦身后的规矩来——同域工具收成一个带 `action` 的入口（`diary` /
+`letter` / `reading` / `speak` 是前四个），对外只多一个工具，不是多七个。
+七个薄壳函数在 `server.py` 里原样留着，只是不再单独注册。
+
+| action | 做什么 |
 |---|---|
-| `ferrideo_create_room` | 开一场。返回房间号 + 她要打开的地址 |
-| `ferrideo_get_context` | **最重要的一个。** 放到第几分钟、当前这句台词、前三句；可带一帧画面（走 image content block）。播放头之后的台词永远拿不到 |
-| `ferrideo_send_danmaku` | 往她画面上发一条弹幕，3 秒内飘过去。上限 60 字 |
-| `ferrideo_request_frame` | 跟播放器要一帧。**异步**：等 3-5 秒再用 `get_context` 带 `include_frame` 取 |
-| `ferrideo_add_note` | 记一笔，自动绑当前播放时间。她在画面上看不到 |
-| `ferrideo_get_room` | 房间全貌：摘录、笔记、所有弹幕。不含字幕全文、不含画面 |
-| `ferrideo_generate_ticket` | 出票根，并直接存成一条 `#观影` 记忆（跳过打标、绝不与旧桶合并） |
+| `create_room` | 开一场。返回房间号 + 她要打开的地址 |
+| `context` | **最常用的一个。** 放到第几分钟、当前这句台词、前三句；`include_frame=True` 时带一帧画面（走 image content block）。播放头之后的台词永远拿不到 |
+| `danmaku` | 往她画面上发一条弹幕，3 秒内飘过去。上限 60 字 |
+| `frame` | 跟播放器要一帧。**异步**：等 3-5 秒再用 `context` 带 `include_frame` 取 |
+| `note` | 记一笔，自动绑当前播放时间。她在画面上看不到 |
+| `room` | 房间全貌：摘录、笔记、所有弹幕。不含字幕全文、不含画面 |
+| `ticket` | 出票根，并直接存成一条 `#观影` 记忆（跳过打标、绝不与旧桶合并） |
 
 ### 防剧透门禁（服务端强制）
 
@@ -128,7 +131,7 @@ Render Web Service (ombre-brain, Docker)               ▼
 
 ### 没有字幕的那一场
 
-用户没传字幕、或者字幕烧死在画面上时，`get_context` 不报错：返回
+用户没传字幕、或者字幕烧死在画面上时，`action="context"` 不报错：返回
 `subtitleMode: "none"`，默认带上一帧，并明说「要知道台词请抓帧看画面」。
 这时抓帧是唯一的上下文来源。
 

@@ -7,6 +7,10 @@ tools/ferrideo/ — 观影（ferrideo）MCP 工具
 让 AI 能跟她看同一场电影：读进度和当前台词、往画面上发弹幕、要一帧看画面、
 记笔记、看房间全貌、散场后出票根。
 
+对外是**一个带 action 的 `ferrideo` 入口**（server.py 里的合并入口），不是七个
+工具——iter 2.3 瘦身把同域工具收成一个入口，工具面多一个就算回退，有测试锁着。
+这里的七个实现函数由那个入口分发。
+
 关键行为：
 - **后端地址只指向门禁端口**（web/ferrideo_bridge.internal_gate_base()，
   默认 http://127.0.0.1:18006/<token>/api/gate）。播放器那套能拿到字幕全文的

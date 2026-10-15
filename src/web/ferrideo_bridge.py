@@ -239,7 +239,7 @@ def _remember_public_base(request) -> None:
     """从走过反向代理的请求里学到「外部看到的域名」，落盘记住。
 
     为什么要这个：python 侧没有任何地方存着 ombre 的对外域名（oauth 那边也是
-    每次从请求头现算）。但 ferrideo_create_room 想告诉她一个**能点开的地址**，
+    每次从请求头现算）。但 ferrideo(action="create_room") 想告诉她一个**能点开的地址**，
     而不是让她自己拼。她开过一次页面之后，这里就知道了。
 
     只在值变化时写盘——播放器 3 秒一次心跳，每次都写就是在拿 SSD 当玩具。

@@ -119,7 +119,7 @@ test('没有字幕轨：不报错，明说要去抓帧', async (t) => {
   const ctx = await res.json();
   assert.strictEqual(ctx.subtitleMode, 'none');
   assert.ok(!('currentLine' in ctx) && !('recentLines' in ctx));
-  assert.ok(ctx.hints.some((h) => h.includes('ferrideo_request_frame')), '要提示去抓帧');
+  assert.ok(ctx.hints.some((h) => h.includes('ferrideo(action="frame")')), '要提示去抓帧');
 });
 
 test('房间全貌不含字幕全文、不含帧的 base64', async (t) => {

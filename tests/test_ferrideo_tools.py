@@ -116,7 +116,7 @@ class _Handler(BaseHTTPRequestHandler):
                                     "truncated": len(body.get("text") or "") > 60})
         if path == f"{GATE_PREFIX}/rooms/K7X2M9/frame-request":
             return self._send(202, {"ok": True, "requestId": "abc",
-                                    "tip": "已经跟播放器要了一帧，等 3-5 秒后用 ferrideo_get_context 带 includeFrame 取。"})
+                                    "tip": '已经跟播放器要了一帧，等 3-5 秒后用 ferrideo(action="context", include_frame=True) 取。'})
         if path == f"{GATE_PREFIX}/rooms/K7X2M9/note":
             return self._send(201, {"ok": True, "at": "00:30:34", "text": body.get("text")})
         if path == f"{GATE_PREFIX}/rooms/K7X2M9/ticket":
@@ -179,7 +179,7 @@ async def test_room_id_is_validated_and_normalised(gate):
 async def test_missing_room_is_explained_not_coded(gate):
     out = await fer.get_context("NOROOM")
     assert "没有 NOROOM 这个房间" in out[0]
-    assert "ferrideo_create_room" in out[0]
+    assert 'ferrideo(action="create_room")' in out[0], "指引里的工具名要跟合并入口一致"
     assert "404" not in out[0]
 
 
@@ -242,7 +242,7 @@ async def test_danmaku_reports_truncation_and_author(gate):
 @pytest.mark.asyncio
 async def test_request_frame_says_it_is_async(gate):
     out = await fer.request_frame("K7X2M9")
-    assert "3-5 秒" in out and "ferrideo_get_context" in out
+    assert "3-5 秒" in out and 'ferrideo(action="context"' in out
 
 
 @pytest.mark.asyncio
@@ -356,15 +356,22 @@ def test_connector_instructions_has_no_hardcoded_tool_count():
 
 
 def test_apply_connector_instructions_fills_real_numbers():
-    """数的是两个 FastMCP 实例的并集，所以在「回灌之前」调也得到完整数字。
-    只数主实例的话这里会得到 5——那正好是这个函数要防的那种错数字。"""
+    """数的是两个实例的并集减去 _DISABLED_TOOLS：
+    - 取并集 → 在「回灌之前」调也得到完整数字（只数主实例会得到 5）
+    - 减瘦身名单 → 不把已经不对外暴露的工具算进去（瘦身只从 mcp 里 del，
+      它们还留在 mcp_extra 里）
+    """
     import server
     n = server.apply_connector_instructions()
-    expected = len(set(server.mcp._tool_manager._tools) | set(server.mcp_extra._tool_manager._tools))
-    assert n == expected and n >= 25, f"工具数看着不对：{n}"
+    union = set(server.mcp._tool_manager._tools) | set(server.mcp_extra._tool_manager._tools)
+    expected = len(union - set(server._DISABLED_TOOLS))
+    assert n == expected and n >= 15, f"工具数看着不对：{n}"
+    assert n < len(union), "被摘除的工具不该算进数字里"
+
     ins = server.mcp.instructions
     assert f"这里有 {n} 个" in ins
     assert f"max_results={n + 10}" in ins
     assert "__TOOL_COUNT__" not in ins and "__MAX_RESULTS__" not in ins
-    for name in ("ferrideo_get_context", "breath", "reading_progress"):
-        assert name in server.mcp._tool_manager._tools or name in server.mcp_extra._tool_manager._tools
+    # 观影入口在场；七条 action 的路由由 test_tool_merge_routing 钉
+    for name in ("ferrideo", "breath"):
+        assert name in union, f"{name} 没注册上"
