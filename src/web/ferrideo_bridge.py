@@ -31,8 +31,9 @@ Render 服务里，共用同一持久盘。形状与 web/reading_bridge.py 完�
 - 不缓存/解析代理流量内容，只转发
 - 不碰记忆桶
 
-对外暴露：register(mcp) / ensure_child_on_boot() / stop_child() /
-         web_token() / internal_gate_base() / data_dir() / drain_rescues() / status()
+对外暴露：register(mcp) / ensure_child_on_boot() / stop_child() / web_token() /
+         internal_gate_base() / public_player_url() / data_dir() /
+         drain_rescues() / status()
 ========================================
 """
 
@@ -57,6 +58,7 @@ logger = logging.getLogger("ombre_brain")
 _DEFAULT_INTERNAL_PORT = 18005      # 播放器端口（127.0.0.1）；18004 是 read-along
 _DEFAULT_GATE_PORT = 18006          # AI 门禁端口；只挂 gate 路由，**不经过反向代理**
 _RESCUE_FILE = "rescued.jsonl"      # 子进程淘汰房间前抢救出来的摘录/笔记
+_PUBLIC_BASE_FILE = ".public-base"  # 外部可见的 scheme://host（从走过代理的请求里学来）
 _RESCUE_DRAIN_SECONDS = 60.0        # 排空检查间隔（监控循环里顺带做）
 _PUBLIC_PREFIX = "/ferrideo"        # 对外路径前缀：/ferrideo/<token>/...
 _TOKEN_BYTES = 16                   # 自动生成 token 的熵（token_urlsafe → ~22 字符）
@@ -84,6 +86,7 @@ _last_spawn_error = ""
 _proxy_client = None                # 惰性创建的 httpx.AsyncClient（连接复用）
 _proxy_client_loop = None           # 创建该 client 的事件循环（换循环要重建）
 _token_cache = ""
+_public_base_cache = None           # None=还没从盘上读过；""=读过但不知道
 
 
 # ============================================================
@@ -226,6 +229,53 @@ def internal_gate_base() -> str:
     这个端口不经过 /ferrideo 反向代理，公网不可达。
     """
     return f"http://127.0.0.1:{_gate_port()}/{web_token()}/api/gate"
+
+
+def _public_base_path() -> str:
+    return os.path.join(data_dir(), _PUBLIC_BASE_FILE)
+
+
+def _remember_public_base(request) -> None:
+    """从走过反向代理的请求里学到「外部看到的域名」，落盘记住。
+
+    为什么要这个：python 侧没有任何地方存着 ombre 的对外域名（oauth 那边也是
+    每次从请求头现算）。但 ferrideo_create_room 想告诉她一个**能点开的地址**，
+    而不是让她自己拼。她开过一次页面之后，这里就知道了。
+
+    只在值变化时写盘——播放器 3 秒一次心跳，每次都写就是在拿 SSD 当玩具。
+    """
+    global _public_base_cache
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if not host:
+        return
+    base = f"{proto or request.url.scheme}://{host}"
+    if base == _public_base_cache:
+        return
+    _public_base_cache = base
+    try:
+        os.makedirs(data_dir(), exist_ok=True)
+        tmp = _public_base_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(base)
+        os.replace(tmp, _public_base_path())
+        logger.info("[ferrideo] 记住对外地址 %s%s/<token>/", base, _PUBLIC_PREFIX)
+    except OSError as e:
+        logger.warning("[ferrideo] 对外地址写盘失败（不影响播放）：%s", e)
+
+
+def public_player_url() -> str:
+    """播放器的完整外部地址，不知道就返回空串（调用方负责给退路）。"""
+    global _public_base_cache
+    if _public_base_cache is None:
+        try:
+            with open(_public_base_path(), "r", encoding="utf-8") as f:
+                _public_base_cache = f.read().strip()
+        except OSError:
+            _public_base_cache = ""
+    if not _public_base_cache:
+        return ""
+    return f"{_public_base_cache}{_PUBLIC_PREFIX}/{web_token()}/"
 
 
 def _child_env() -> dict:
@@ -494,6 +544,7 @@ def register(mcp) -> None:
     @mcp.custom_route(_PUBLIC_PREFIX + "/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
     async def ferrideo_proxy(request: Request):
         import httpx
+        _remember_public_base(request)
         rest = request.path_params.get("rest", "")
         target = f"http://127.0.0.1:{_internal_port()}/{rest}"
         if request.url.query:
