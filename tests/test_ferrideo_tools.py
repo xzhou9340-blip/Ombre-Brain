@@ -45,7 +45,14 @@ SEEN: list = []
 STATE = {
     "frame": None,          # bytes or None
     "ticket_fail": False,
+    "full": False,          # True＝建房时名额已满
 }
+ROOMS_LIST = [
+    {"roomId": "AAA222", "title": "测试一", "position": "00:00:12", "idleMinutes": 37,
+     "finished": False, "hasTicket": False, "quoteCount": 0, "noteCount": 0, "danmakuCount": 0},
+    {"roomId": "K7X2M9", "title": "花样年华", "position": "00:30:34", "idleMinutes": 0,
+     "finished": False, "hasTicket": False, "quoteCount": 1, "noteCount": 0, "danmakuCount": 3},
+]
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -72,6 +79,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         SEEN.append(("GET", self.path))
         path = self.path.split("?")[0]
+        if path == f"{GATE_PREFIX}/rooms":
+            return self._send(200, {"rooms": ROOMS_LIST})
         if path == f"{GATE_PREFIX}/rooms/K7X2M9/context":
             out = {
                 "roomId": "K7X2M9", "title": "花样年华", "state": "playing",
@@ -107,6 +116,13 @@ class _Handler(BaseHTTPRequestHandler):
         SEEN.append(("POST", self.path))
         path = self.path.split("?")[0]
         body = self._body()
+        if path == f"{GATE_PREFIX}/rooms" and STATE["full"]:
+            return self._send(409, {"error": "同时最多 5 个房间，现在都还开着。关掉一个不用的再开新的",
+                                    "rooms": ROOMS_LIST})
+        if path == f"{GATE_PREFIX}/rooms/K7X2M9/close":
+            return self._send(200, {"ok": True, "roomId": "K7X2M9", "title": "花样年华", "rescued": True})
+        if path == f"{GATE_PREFIX}/rooms/AAA222/close":
+            return self._send(200, {"ok": True, "roomId": "AAA222", "title": "测试一", "rescued": False})
         if path == f"{GATE_PREFIX}/rooms":
             return self._send(201, {"roomId": "K7X2M9", "title": body.get("title") or "未命名",
                                     "tip": "房间号 K7X2M9，在 iPad 上输入这个号"})
@@ -135,6 +151,7 @@ class _Handler(BaseHTTPRequestHandler):
 def gate(monkeypatch):
     SEEN.clear()
     STATE["frame"] = None
+    STATE["full"] = False
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}{GATE_PREFIX}"
@@ -181,6 +198,38 @@ async def test_missing_room_is_explained_not_coded(gate):
     assert "没有 NOROOM 这个房间" in out[0]
     assert 'ferrideo(action="create_room")' in out[0], "指引里的工具名要跟合并入口一致"
     assert "404" not in out[0]
+
+
+# ============================================================
+# 名额满了：列出来、能关
+# ------------------------------------------------------------
+# 真实事故：测试时开了 5 个房间都没退出，克只能回一句「你开了五个房间」，
+# 她既不知道是哪五个，也没有办法关。
+# ============================================================
+@pytest.mark.asyncio
+async def test_full_create_lists_rooms_and_says_how_to_close(gate):
+    STATE["full"] = True
+    out = await fer.create_room("新的一部")
+    assert "开不了新房间" in out
+    assert "AAA222" in out and "测试一" in out and "K7X2M9" in out
+    assert "37 分钟没动静" in out and "什么都没留下" in out, "要让人一眼认出测试时丢下的空房间"
+    assert "正在看" in out
+    assert 'ferrideo(action="close"' in out
+
+
+@pytest.mark.asyncio
+async def test_list_rooms(gate):
+    out = await fer.list_rooms()
+    assert "开着 2 个房间" in out
+    assert "1 句摘录" in out and "3 条弹幕" in out
+
+
+@pytest.mark.asyncio
+async def test_close_room_says_whether_it_rescued(gate):
+    out = await fer.close_room("k7x2m9")
+    assert "关掉了" in out and "letter" in out, "有摘录的关掉时要说已经存进 letter"
+    out2 = await fer.close_room("AAA222")
+    assert "关掉了" in out2 and "letter" not in out2
 
 
 # ============================================================

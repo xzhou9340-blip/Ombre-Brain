@@ -6,6 +6,8 @@ tools/ferrideo/core.py — 观影工具实现
 对 ferrideo 子进程的**门禁端口**做人话包装：
 
 - create_room(title)                  → 开一场，返回房间号 + 进场地址
+- list_rooms()                        → 开着的房间（名额满了时用来挑一个关）
+- close_room(room_id)                 → 关掉一个（有摘录/笔记会先抢救进 letter）
 - get_context(room_id, include_frame)  → 现在放到哪、这一句是什么（最重要的一个）
 - send_danmaku(room_id, text, author)  → 往她画面上发一条弹幕
 - request_frame(room_id)               → 跟播放器要一帧（异步）
@@ -119,7 +121,17 @@ async def create_room(title: Optional[str] = "") -> str:
     except Exception as e:  # noqa: BLE001
         return _conn_help(e)
     if status == 409:
-        return f"开不了新房间：{data.get('error', data)}"
+        rooms = data.get("rooms") or []
+        lines = [f"开不了新房间：{data.get('error', data)}"]
+        if rooms:
+            lines.append("现在开着的：")
+            lines += [_fmt_room_line(r) for r in rooms]
+            lines.append(
+                '问她哪个不要了，用 ferrideo(action="close", room_id=...) 关掉再开。'
+                "那种「空的、很久没动静」的多半是她测试时开出来的；"
+                "有摘录或笔记的关掉前会先存进 letter，不会丢。"
+            )
+        return "\n".join(lines)
     if status not in (200, 201):
         return f"开场失败（HTTP {status}）：{data.get('error', data)}"
 
@@ -143,6 +155,55 @@ async def create_room(title: Optional[str] = "") -> str:
         )
     lines.append(f"进去之后在「加入房间」里输入 {room_id}，选片、选字幕（字幕可选），点开始。")
     return "\n".join(lines)
+
+
+def _fmt_room_line(r: dict) -> str:
+    """一行房间摘要。让人一眼分得出「测试时丢下的空房间」和「真在看的」。"""
+    bits = []
+    if r.get("finished"):
+        bits.append("已散场" + ("、票根已出" if r.get("hasTicket") else ""))
+    idle = r.get("idleMinutes")
+    if isinstance(idle, int):
+        bits.append("正在看" if idle < 1 else f"{idle} 分钟没动静")
+    left = [f"{r[k]} {name}" for k, name in (("quoteCount", "句摘录"), ("noteCount", "条笔记"),
+                                             ("danmakuCount", "条弹幕")) if r.get(k)]
+    bits.append("、".join(left) if left else "什么都没留下")
+    return f"· {r.get('roomId')}《{r.get('title')}》 放到 {r.get('position')}，" + "，".join(bits)
+
+
+# ============================================================
+# list_rooms / close_room
+# ============================================================
+async def list_rooms() -> str:
+    try:
+        status, data = await _request("GET", "/rooms")
+    except Exception as e:  # noqa: BLE001
+        return _conn_help(e)
+    if status != 200:
+        return f"读不到房间列表（HTTP {status}）：{data.get('error', data)}"
+    rooms = data.get("rooms") or []
+    if not rooms:
+        return '现在一个房间都没开。要开一场就用 ferrideo(action="create_room")。'
+    return f"开着 {len(rooms)} 个房间：\n" + "\n".join(_fmt_room_line(r) for r in rooms)
+
+
+async def close_room(room_id: str) -> str:
+    err = _check_room_id(room_id)
+    if err:
+        return err
+    rid = room_id.strip().upper()
+    try:
+        status, data = await _request("POST", f"/rooms/{rid}/close", json_body={})
+    except Exception as e:  # noqa: BLE001
+        return _conn_help(e)
+    if status == 404:
+        return f"没有 {rid} 这个房间，可能已经关掉或过期了。"
+    if status != 200:
+        return f"没关掉（HTTP {status}）：{data.get('error', data)}"
+    out = f"关掉了：{rid}《{data.get('title')}》。"
+    if data.get("rescued"):
+        out += "里面的摘录和笔记已经先存进 letter 了，不会丢——之后记得补成记忆。"
+    return out
 
 
 def _player_path() -> str:

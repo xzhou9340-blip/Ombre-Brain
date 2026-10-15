@@ -69,7 +69,7 @@ def test_disabled_tools_keep_their_code():
     "bark_push", "_speak_voice",
     "ferrideo_create_room", "ferrideo_get_context", "ferrideo_send_danmaku",
     "ferrideo_request_frame", "ferrideo_add_note", "ferrideo_get_room",
-    "ferrideo_generate_ticket",
+    "ferrideo_generate_ticket", "ferrideo_list_rooms", "ferrideo_close_room",
 ])
 def test_merged_shells_still_exist(shell):
     """合并入口调的就是这些薄壳，_with_notice 的通知/日志全靠它们带着。"""
@@ -101,7 +101,8 @@ def probes(monkeypatch):
                  "ferrideo_create_room", "ferrideo_get_context",
                  "ferrideo_send_danmaku", "ferrideo_request_frame",
                  "ferrideo_add_note", "ferrideo_get_room",
-                 "ferrideo_generate_ticket"):
+                 "ferrideo_generate_ticket", "ferrideo_list_rooms",
+                 "ferrideo_close_room"):
         monkeypatch.setattr(s, name, _probe(name))
     return calls
 
@@ -248,6 +249,16 @@ async def test_ferrideo_routes_all_seven_actions(probes):
 
 
 @pytest.mark.asyncio
+async def test_ferrideo_rooms_and_close(probes):
+    """名额满了时的两条出路：看开着哪些、关掉一个。"""
+    assert await s.ferrideo(action="rooms") == "<ferrideo_list_rooms>"
+    assert probes[-1] == ("ferrideo_list_rooms", {})
+
+    await s.ferrideo(action="close", room_id="K7X2M9")
+    assert probes[-1] == ("ferrideo_close_room", {"room_id": "K7X2M9"})
+
+
+@pytest.mark.asyncio
 async def test_ferrideo_include_frame_keeps_none(probes):
     """include_frame 的三态要保住：None≠False。
     没字幕的那一场默认带帧就是靠 None 走到服务端默认值的。"""
@@ -262,6 +273,6 @@ async def test_ferrideo_include_frame_keeps_none(probes):
 async def test_ferrideo_unknown_action_lists_the_seven(probes):
     out = await s.ferrideo(action="play")
     assert "未知 action" in out
-    for a in ("create_room", "context", "danmaku", "frame", "note", "room", "ticket"):
+    for a in ("create_room", "context", "danmaku", "frame", "note", "room", "ticket", "rooms", "close"):
         assert a in out
     assert not probes, "未知 action 不该落到任何薄壳上"

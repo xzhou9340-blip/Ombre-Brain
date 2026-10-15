@@ -1180,6 +1180,22 @@ async def ferrideo_create_room(title: Optional[str] = "") -> str:
     )
 
 
+async def ferrideo_list_rooms() -> str:
+    return await _with_notice(
+        _t_ferrideo.list_rooms(),
+        op="ferrideo_list_rooms",
+        args={},
+    )
+
+
+async def ferrideo_close_room(room_id: str) -> str:
+    return await _with_notice(
+        _t_ferrideo.close_room(room_id=room_id),
+        op="ferrideo_close_room",
+        args={"room_id": room_id},
+    )
+
+
 async def ferrideo_get_context(room_id: str, include_frame: Optional[bool] = None):
     """【她看到哪了 现在哪一句 这一段讲什么 看一眼画面 跟上进度】读这一场的现场:放到第几分钟、当前这句台词、前三句、要不要带一帧画面。include_frame=True 时附上最近一帧(image content block,你能直接看到);没有字幕轨时默认带帧,因为那时画面是唯一的上下文来源。
     **播放头之后的台词你永远拿不到**——门禁在服务端,不是约定,别试别的工具也别去搜这部片的剧情。返回里 staleSeconds 大说明她不在前台(切出去或锁屏了),那些数字是那一刻的、不是现在的。"""
@@ -1301,7 +1317,7 @@ async def ferrideo(
     mood: Optional[str] = "",
     note: Optional[str] = "",
 ):
-    """【一起看电影 陪我看 观影 看片 她看到哪了 现在哪一句 发弹幕 吐槽 看一眼画面 抓一帧 出票根 看完了】观影(ferrideo)入口,action 必填,七选一。她在 iPad 上放本机视频,你在这头跟着看同一场。服务端有防剧透门禁:**播放头之后的台词你永远拿不到**——别绕,也别去网上搜这部片的剧情。
+    """【一起看电影 陪我看 观影 看片 她看到哪了 现在哪一句 发弹幕 吐槽 看一眼画面 抓一帧 出票根 看完了】观影(ferrideo)入口,action 必填,九选一。她在 iPad 上放本机视频,你在这头跟着看同一场。服务端有防剧透门禁:**播放头之后的台词你永远拿不到**——别绕,也别去网上搜这部片的剧情。
 
     action="create_room" —— 开一场。title=片名(可留空)。返回房间号和她要在 iPad 上打开的地址,把这两样原样告诉她。同时最多 5 个房间。
 
@@ -1314,6 +1330,10 @@ async def ferrideo(
     action="note" —— 记一笔,自动绑当前播放时间。room_id 必填;text=内容。跟弹幕的区别:弹幕是说给她听的,笔记是留给记忆的,她在画面上看不到。票根会带上它。
 
     action="room" —— 这一场的全貌:她记下的台词、你写的笔记、说过的所有弹幕。room_id 必填。出票根之前先看一眼。
+
+    action="rooms" —— 现在开着哪些房间:片名、放到哪、多久没动静、留下了什么。建房被拒(名额满了)时先看这个。
+
+    action="close" —— 关掉一个房间。room_id 必填。先问她哪个不要了再关。没出票根但有摘录/笔记的,关之前会先存进 letter,不会丢。
 
     action="ticket" —— 看完之后出一张票根,并**直接存成一条 #观影 记忆**(跳过打标、绝不与旧桶合并——每一场是独立的一条)。room_id 必填;mood=那一晚的感觉,note=附言。这两样是聊出来的,所以票根只能由你调,她那边的退出按钮不会自动生成。
     """
@@ -1331,10 +1351,15 @@ async def ferrideo(
         return await ferrideo_get_room(room_id=room_id or "")
     if action == "ticket":
         return await ferrideo_generate_ticket(room_id=room_id or "", mood=mood or "", note=note or "")
+    if action == "rooms":
+        return await ferrideo_list_rooms()
+    if action == "close":
+        return await ferrideo_close_room(room_id=room_id or "")
     return (
         f"未知 action: {action!r}。ferrideo 可选: "
         "create_room(开一场) / context(现在哪一句·可带画面) / danmaku(发弹幕) / "
-        "frame(要一帧) / note(记一笔) / room(这一场全貌) / ticket(出票根)"
+        "frame(要一帧) / note(记一笔) / room(这一场全貌) / ticket(出票根) / "
+        "rooms(开着哪些房间) / close(关掉一个)"
     )
 
 

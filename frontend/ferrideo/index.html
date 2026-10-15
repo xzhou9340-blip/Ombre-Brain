@@ -75,6 +75,18 @@
   .file-btn input { display: none; }
   .picked { font-size: .8rem; color: var(--ink-dim); margin-top: .4rem; word-break: break-all; }
 
+  /* 开着的房间：测试时开出来又丢下的，在这里能看见、能关 */
+  #openRooms { display: flex; flex-direction: column; gap: .5rem; }
+  .room-row {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    padding: .6rem .7rem; background: #131317; border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .room-row .rid { font-variant-numeric: tabular-nums; letter-spacing: .12em; color: var(--ink); }
+  .room-row .meta { flex: 1; min-width: 10em; font-size: .8rem; color: var(--ink-dim); }
+  .room-row .meta b { color: var(--ink); font-weight: 400; }
+  .room-row button { padding: .35rem .75rem; font-size: .82rem; }
+  #openRoomsHint.warn { color: var(--warn); }
+
   /* ---- 放映 ----------------------------------------------------------- */
   #screen { position: fixed; inset: 0; background: #000; display: none; }
   #screen.on { display: block; }
@@ -200,6 +212,12 @@
     <div class="hint" id="joinHint"></div>
   </div>
 
+  <div class="field" id="openRoomsBox" hidden>
+    <label>开着的房间</label>
+    <div class="hint" id="openRoomsHint"></div>
+    <div id="openRooms"></div>
+  </div>
+
   <hr class="sep">
 
   <div class="field">
@@ -306,6 +324,7 @@ async function call(path, { method = 'GET', body, raw, type } = {}) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
@@ -320,6 +339,7 @@ function mb(bytes) { return (bytes / 1048576).toFixed(1) + ' MB'; }
 function show(which) {
   for (const id of ['setup', 'lobby']) $(id).classList.toggle('on', id === which);
   $('screen').classList.toggle('on', which === 'screen');
+  if (which === 'lobby') refreshRooms();
 }
 
 function toast(msg, ms = 1600) {
@@ -535,12 +555,82 @@ $('start').onclick = async () => {
     store.set('lastTitle', S.title);
     enterScreen();
   } catch (e) {
-    $('joinHint').textContent = e.status === 404
-      ? '房间不存在，或者已经过期了'
-      : ('连不上后端：' + e.message);
+    if (e.status === 409 && e.data && e.data.rooms) {
+      // 名额满了：不是连不上，是房间开太多了。直接列出来让她挑一个关
+      $('joinHint').textContent = '';
+      renderRooms(e.data.rooms, '房间已经开满了。关掉一个不用的，再点「开始」。', true);
+    } else if (e.status === 404) {
+      $('joinHint').textContent = '房间不存在，或者已经过期了';
+    } else if (e.status) {
+      $('joinHint').textContent = e.message;
+    } else {
+      $('joinHint').textContent = '连不上后端：' + e.message;
+    }
     $('start').disabled = false;
   }
 };
+
+/* ============================================================
+ * 开着的房间：能看见、能进、能关
+ * 之前没有这一块——测试时点了几次「开始」，房间就一个个攒着，
+ * 满了之后既看不到是哪些、也没有地方能关
+ * ============================================================ */
+function ago(iso) {
+  const min = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (min < 1) return '正在看';
+  if (min < 60) return `${min} 分钟前`;
+  return `${Math.floor(min / 60)} 小时前`;
+}
+
+function renderRooms(rooms, hint = '', warn = false) {
+  const box = $('openRoomsBox');
+  const list = $('openRooms');
+  list.innerHTML = '';
+  $('openRoomsHint').textContent = hint;
+  $('openRoomsHint').classList.toggle('warn', warn);
+  box.hidden = !rooms.length;
+  for (const r of rooms) {
+    const left = [
+      r.quoteCount ? `${r.quoteCount} 句摘录` : '',
+      r.noteCount ? `${r.noteCount} 条笔记` : '',
+      r.danmakuCount ? `${r.danmakuCount} 条弹幕` : '',
+    ].filter(Boolean).join('、') || '什么都没留下';
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    row.innerHTML = `<span class="rid"></span><span class="meta"><b class="t"></b><br><span class="m"></span></span>
+      <button type="button" class="go">进入</button><button type="button" class="kill">关掉</button>`;
+    row.querySelector('.rid').textContent = r.id;
+    row.querySelector('.t').textContent = `《${r.title}》`;
+    row.querySelector('.m').textContent = `${ago(r.lastSeenAt)} · ${left}${r.finished ? ' · 已散场' : ''}`;
+    row.querySelector('.go').onclick = () => {
+      $('joinId').value = r.id;
+      $('joinHint').textContent = `选好片子后点「开始」，会进入 ${r.id}`;
+    };
+    row.querySelector('.kill').onclick = async () => {
+      const keep = r.quoteCount || r.noteCount ? '\n里面记下的句子和笔记会先存进信里，不会丢。' : '';
+      if (!confirm(`关掉《${r.title}》（${r.id}）？${keep}`)) return;
+      try {
+        await call(`/rooms/${r.id}`, { method: 'DELETE' });
+        if ($('joinId').value === r.id) $('joinId').value = '';
+        if (store.get('lastRoom') === r.id) store.set('lastRoom', '');
+        refreshRooms();
+      } catch (e) {
+        $('openRoomsHint').textContent = '没关掉：' + e.message;
+        $('openRoomsHint').classList.add('warn');
+      }
+    };
+    list.appendChild(row);
+  }
+}
+
+async function refreshRooms() {
+  try {
+    const { rooms } = await call('/rooms');
+    renderRooms(rooms || []);
+  } catch {
+    /* 连不上就先不显示这一块，不影响选片 */
+  }
+}
 
 async function uploadSubtitle() {
   const payload = JSON.stringify({ cues: S.cues.map((c) => ({ startMs: c.startMs, endMs: c.endMs, text: c.text })) });

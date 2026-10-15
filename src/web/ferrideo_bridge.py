@@ -68,6 +68,9 @@ _STABLE_RESET_SECONDS = 60.0        # 子进程存活超过该时长后退避复
 _MONITOR_POLL_SECONDS = 1.0         # 监控循环轮询间隔
 _PROXY_CONNECT_TIMEOUT = 5.0        # 环回连接超时
 _PROXY_READ_TIMEOUT = 60.0          # 读超时（ferrideo 没有传大文件的场景，60s 够）
+_READY_TIMEOUT_SECONDS = 20.0       # 拉起后等两个端口 /healthz 都响应的上限
+_READY_POLL_SECONDS = 0.5
+_LOG_TAIL_LINES = 6                 # 出事时从子进程日志里搬几行到 ombre 日志
 
 # 逐跳头：代理不透传（RFC 7230 §6.1），host 也要重算
 _HOP_BY_HOP = {
@@ -86,6 +89,7 @@ _last_spawn_error = ""
 _proxy_client = None                # 惰性创建的 httpx.AsyncClient（连接复用）
 _proxy_client_loop = None           # 创建该 client 的事件循环（换循环要重建）
 _token_cache = ""
+_ready_task: "asyncio.Task | None" = None
 _public_base_cache = None           # None=还没从盘上读过；""=读过但不知道
 
 
@@ -428,6 +432,90 @@ def _spawn() -> "subprocess.Popen | None":
         return None
 
 
+def _child_log_path() -> str:
+    return os.path.join(data_dir(), "ferrideo-server.log")
+
+
+def _child_log_tail(lines: int = _LOG_TAIL_LINES) -> str:
+    """子进程日志的最后几行，拼成一行给 ombre 日志用。
+
+    为什么需要：子进程的 stdout/stderr 全部重定向到了盘上的
+    ferrideo-server.log，**Render 的日志面板里看不到**。node 那边写得再清楚
+    （「token 不合法，拒绝启动」「端口被占」「SyntaxError」），不搬过来就等于没写。
+    """
+    try:
+        with open(_child_log_path(), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            raw = f.read().decode("utf-8", "replace")
+    except OSError:
+        return "（子进程日志读不到）"
+    # node 崩溃时最后几行全是调用栈（at Function._load ...）和版本号，
+    # 真正的原因（SyntaxError: ... / 拒绝启动 / EADDRINUSE）在栈的上面。
+    # 只截最后 N 行的话，搬过去的恰好是最没用的部分——所以先把栈帧滤掉。
+    kept = [
+        ln.strip() for ln in raw.splitlines()
+        if ln.strip()
+        and not ln.strip().startswith("at ")
+        and not ln.strip().startswith("Node.js v")
+        and set(ln.strip()) != {"^"}
+    ][-lines:]
+    return " | ".join(kept) if kept else "（子进程日志是空的）"
+
+
+async def _probe(port: int) -> bool:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(f"http://127.0.0.1:{port}/healthz")
+        return r.status_code == 200
+    except Exception:  # noqa: BLE001 — 还没起来，下一轮再试
+        return False
+
+
+async def _await_ready(proc: "subprocess.Popen") -> bool:
+    """拉起之后，等播放器和门禁两个端口的 /healthz 都响应，再往 ombre 日志里报一声「就绪」。
+
+    之前 Render 日志里只看得到「子进程已启动」——那只说明 Popen 成功了，
+    不说明 node 真的跑起来了。排查时只能靠「没看到报错」去推断，这不够。
+    现在：就绪了明说；没就绪（进程退出或超时）就把子进程日志的尾巴搬过来。
+    """
+    deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+    player_ok = gate_ok = False
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            # 进程已经退了：监控循环马上会报「子进程退出」并带上日志尾巴，
+            # 这里再报一次就是同一件事说两遍
+            return False
+        player_ok = player_ok or await _probe(_internal_port())
+        gate_ok = gate_ok or await _probe(_gate_port())
+        if player_ok and gate_ok:
+            logger.info(
+                "[ferrideo] 子进程就绪：播放器 127.0.0.1:%s ✓  门禁 127.0.0.1:%s ✓（pid=%s）",
+                _internal_port(), _gate_port(), proc.pid,
+            )
+            return True
+        await asyncio.sleep(_READY_POLL_SECONDS)
+    logger.warning(
+        "[ferrideo] 子进程 %.0fs 内没有就绪（播放器 %s / 门禁 %s）。它自己说：%s",
+        _READY_TIMEOUT_SECONDS,
+        "✓" if player_ok else "✗", "✓" if gate_ok else "✗", _child_log_tail(),
+    )
+    return False
+
+
+def _watch_ready(proc: "subprocess.Popen | None") -> None:
+    """后台跑就绪探测，不阻塞 ombre 启动。"""
+    global _ready_task
+    if proc is None:
+        return
+    try:
+        _ready_task = asyncio.get_event_loop().create_task(_await_ready(proc))
+    except Exception as e:  # noqa: BLE001 — 探不了就算了，不影响子进程本身
+        logger.warning("[ferrideo] 就绪探测没能启动：%s", e)
+
+
 async def _monitor() -> None:
     """监控循环：子进程退出 → 指数退避重启；稳定运行 60s 后退避复位。
     顺带每分钟排空一次抢救文件（被回收房间的摘录/笔记 → letter）。"""
@@ -448,7 +536,10 @@ async def _monitor() -> None:
             await asyncio.sleep(_MONITOR_POLL_SECONDS)
             continue
         if proc is not None:
-            logger.warning("[ferrideo] 子进程退出（code=%s），%.0fs 后重启", proc.poll(), backoff)
+            logger.warning(
+                "[ferrideo] 子进程退出（code=%s），%.0fs 后重启。它自己说：%s",
+                proc.poll(), backoff, _child_log_tail(),
+            )
         await asyncio.sleep(backoff)
         if not _managed:  # 退避睡眠期间可能被 stop_child
             return
@@ -459,6 +550,7 @@ async def _monitor() -> None:
             logger.warning("[ferrideo] 重启失败：%s", _last_spawn_error)
         else:
             logger.info("[ferrideo] 子进程已重启 pid=%s", _child_proc.pid)
+            _watch_ready(_child_proc)
 
 
 async def ensure_child_on_boot() -> None:
@@ -479,14 +571,18 @@ async def ensure_child_on_boot() -> None:
             )
         if _monitor_task is None or _monitor_task.done():
             _monitor_task = asyncio.get_event_loop().create_task(_monitor())
+        _watch_ready(_child_proc)
     except Exception as e:  # noqa: BLE001 — 启动期兜底
         logger.warning("[ferrideo] 观影子进程启动异常已忽略：%s", e)
 
 
 async def stop_child() -> None:
     """server.py lifespan 关停钩子。"""
-    global _child_proc, _monitor_task, _managed, _proxy_client
+    global _child_proc, _monitor_task, _managed, _proxy_client, _ready_task
     _managed = False
+    if _ready_task is not None and not _ready_task.done():
+        _ready_task.cancel()
+    _ready_task = None
     if _monitor_task is not None:
         _monitor_task.cancel()
         _monitor_task = None
