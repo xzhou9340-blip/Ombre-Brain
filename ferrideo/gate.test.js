@@ -236,3 +236,41 @@ test('票根：拿到摘录和笔记，不含字幕全文', async (t) => {
   assert.ok(!JSON.stringify(ticket).includes('第50句'));
   assert.ok(store.getRoom(room.id).ticket, '票根要存进房间');
 });
+
+// ============================================================
+// 列房间 / 关房间
+// ============================================================
+test('AI 能列出开着的房间，也能关掉', async (t) => {
+  const { store, server, base } = boot();
+  t.after(() => server.close());
+  await ready(server);
+  const a = movieAt(store, 10);
+  const b = store.createRoom('另一部');
+
+  const list = await (await fetch(`${base()}/rooms`)).json();
+  assert.strictEqual(list.rooms.length, 2);
+  assert.ok(list.rooms.every((r) => r.roomId && r.title && typeof r.idleMinutes === 'number'));
+  assert.ok(!JSON.stringify(list).includes('第11句'), '列表不许带字幕');
+
+  const closed = await (await fetch(`${base()}/rooms/${b.id}/close`, { method: 'POST' })).json();
+  assert.strictEqual(closed.ok, true);
+  assert.strictEqual(store.getRoom(b.id), null);
+  assert.ok(store.getRoom(a.id), '只关指定的那个');
+});
+
+test('名额满了建房：带回开着的房间列表', async (t) => {
+  const { store, server, base } = boot();
+  t.after(() => server.close());
+  await ready(server);
+  for (let i = 0; i < store._internals.MAX_ROOMS; i++) {
+    const r = store.createRoom(`在看${i}`);
+    store.heartbeat(r, { state: 'playing', positionMs: 1000 });
+  }
+  const res = await fetch(`${base()}/rooms`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '第六部' }),
+  });
+  assert.strictEqual(res.status, 409);
+  const body = await res.json();
+  assert.ok(body.error.includes('关掉'));
+  assert.strictEqual(body.rooms.length, store._internals.MAX_ROOMS);
+});

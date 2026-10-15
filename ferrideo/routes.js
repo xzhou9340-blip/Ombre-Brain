@@ -6,7 +6,9 @@
  * 原规格书 5.0 的 Bearer token 方案作废（v2 §1.2：照 read-along 走路径 token）。
  *
  * 端点：
+ *   GET  /api/rooms                 开着的房间列表（大厅用：进入 / 关掉）
  *   POST /api/rooms                 建房（body.id 可选：心跳 404 后重建同号房间）
+ *   DELETE /api/rooms/:id           关掉一个房间（有摘录/笔记就先抢救进 letter）
  *   GET  /api/rooms/:id             房间状态（不含字幕全文、不含帧二进制）
  *   GET  /api/rooms/:id/subtitle    字幕 cues（播放器加入已有房间时取回，见下）
  *   POST /api/rooms/:id/heartbeat   心跳（3 秒一次，捎回待办弹幕 + 抓帧请求）
@@ -79,11 +81,26 @@ function roomView(room) {
 }
 
 function register(router) {
+  // ---- 开着的房间（大厅里列出来，能进能关）----------------------------
+  router.get('/api/rooms', (req, res) => {
+    res.json({ rooms: store.listRooms().map(store.roomSummary) });
+  });
+
   // ---- 建房 ----------------------------------------------------------
   router.post('/api/rooms', (req, res) => {
     const { title, id } = req.body || {};
     try {
       return res.status(201).json(roomView(store.createRoom(title, id)));
+    } catch (e) {
+      // 名额满了：把开着的房间一起带回去，大厅直接列出来让她挑一个关掉
+      return res.status(e.status || 500).json({ error: e.message, rooms: e.rooms });
+    }
+  });
+
+  // ---- 关房间 --------------------------------------------------------
+  router.delete('/api/rooms/:id', withRoom, (req, res) => {
+    try {
+      return res.json(store.closeRoom(req.room, '在大厅里手动关掉'));
     } catch (e) {
       return fail(res, e.status || 500, e.message);
     }

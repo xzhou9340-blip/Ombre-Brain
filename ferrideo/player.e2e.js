@@ -257,6 +257,34 @@ async function main() {
     ok(finished.watchedMs > 0, '记下了实际观看时长', String(finished.watchedMs));
     ok(finished.ticket === null, '退出不生成票根（票根只能 AI 调工具生成）');
 
+    // ---- 开着的房间：真实事故的完整路径 ----
+    // 测试时连点几次「开始」，房间一个个攒满，之前既看不到是哪些、也没处关
+    await page.waitForSelector('#openRoomsBox:not([hidden])', { timeout: 5000 });
+    ok((await page.$$eval('.room-row', (els) => els.length)) >= 1, '回到大厅能看到开着的房间');
+
+    for (let i = 0; i < 5; i += 1) {         // 用 API 把名额塞满，且都「正在看」，不会被自动让位
+      const r = await req(`${BASE}/api/rooms`, { method: 'POST', body: { title: `占位${i}` } });
+      if (r.status === 201) {
+        await req(`${BASE}/api/rooms/${r.body.id}/heartbeat`, { method: 'POST', body: { state: 'playing', positionMs: 1000 } });
+      }
+    }
+    await page.fill('#joinId', '');
+    await page.click('#start');
+    await page.waitForFunction(() => document.getElementById('openRoomsHint').textContent.includes('开满'), null, { timeout: 5000 });
+    ok(!(await page.textContent('#joinHint')).includes('连不上'), '名额满了不再误报成「连不上后端」');
+    const before = await page.$$eval('.room-row', (els) => els.length);
+    ok(before === 5, '名额满时列出全部 5 个房间', String(before));
+
+    page.once('dialog', (d) => d.accept());
+    await page.click('.room-row .kill');
+    await page.waitForFunction((n) => document.querySelectorAll('.room-row').length === n - 1, before, { timeout: 5000 });
+    const left = (await req(`${BASE}/api/rooms`)).body.rooms.length;
+    ok(left === 4, '点「关掉」后后端也真的少了一个', String(left));
+
+    await page.click('#start');                // 腾出名额后再点开始，应该能进
+    await page.waitForSelector('#screen.on', { timeout: 8000 });
+    ok(true, '关掉一个之后能正常开新的一场');
+
     ok(pageErrors.length === 0, '整个过程没有未捕获的 JS 报错', pageErrors.join(' | '));
   } finally {
     await browser.close();

@@ -80,7 +80,7 @@ MERGED_AWAY = {
     "bark_push",
     "ferrideo_create_room", "ferrideo_get_context", "ferrideo_send_danmaku",
     "ferrideo_request_frame", "ferrideo_add_note", "ferrideo_get_room",
-    "ferrideo_generate_ticket",
+    "ferrideo_generate_ticket", "ferrideo_list_rooms", "ferrideo_close_room",
 }
 
 

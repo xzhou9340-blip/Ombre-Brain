@@ -66,11 +66,11 @@ test('名额满了：挤掉已散场的房间，但不挤还没生成票根的�
   for (let i = 1; i < cap; i++) store.createRoom(`第${i + 1}部`);
 
   // 全都在放映中 → 挤不动，明确报错
-  assert.throws(() => store.createRoom('第六部'), /没有已经散场的可以回收/);
+  assert.throws(() => store.createRoom('第六部'), /都还开着/);
 
   // 第一部散场了，但票根还没聊出来、也没过一小时 → 仍然不许挤
   store.finish(first, 7200000);
-  assert.throws(() => store.createRoom('第六部'), /没有已经散场的可以回收/);
+  assert.throws(() => store.createRoom('第六部'), /都还开着/);
 
   // 票根生成了 → 可以挤
   store.setTicket(first, { title: '第一部', mood: '安静' });
@@ -116,7 +116,7 @@ test('抢救写不进去就不许淘汰——宁可建房失败也不能无声�
     return realOpen(f, ...rest);
   };
   try {
-    assert.throws(() => store.createRoom('新的一部'), /没有已经散场的可以回收/);
+    assert.throws(() => store.createRoom('新的一部'), /都还开着/);
   } finally {
     fs.openSync = realOpen;
   }
@@ -379,4 +379,88 @@ test('12 小时没有心跳的房间被回收，帧和快照一起删', () => {
   assert.strictEqual(store.getRoom(room.id), null);
   assert.ok(!fs.existsSync(store._internals.snapshotPath(room.id)));
   assert.ok(!fs.existsSync(store._internals.frameDir(room.id)));
+});
+
+// ============================================================
+// 关房间 / 空房间让位
+// ------------------------------------------------------------
+// 真实事故：测试时在大厅点了 5 次「开始」，5 个房间都没退出，名额卡死，
+// 而且没有任何地方能关。这一组钉住：能关、空的会自己让位、正在看的不挤。
+// ============================================================
+test('能手动关房间，帧和快照一起删', () => {
+  const dir = tmpDir('close');
+  const store = freshStore(dir);
+  const room = store.createRoom('测试片');
+  store.saveFrame(room, { buffer: Buffer.from('画面') });
+  store.flushSnapshots();
+  const out = store.closeRoom(room);
+  assert.strictEqual(out.ok, true);
+  assert.strictEqual(out.rescued, false, '空房间不需要抢救');
+  assert.strictEqual(store.getRoom(room.id), null);
+  assert.ok(!fs.existsSync(store._internals.frameDir(room.id)));
+  assert.ok(!fs.existsSync(store._internals.snapshotPath(room.id)));
+});
+
+test('关有摘录的房间：先抢救再关；抢救不了就不关', () => {
+  const dir = tmpDir('closeresc');
+  const store = freshStore(dir);
+  const room = store.createRoom('有摘录');
+  store.addQuote(room, { text: '不能丢的一句', positionMs: 1000 });
+
+  const realOpen = fs.openSync;
+  fs.openSync = (f, ...rest) => {
+    if (String(f).endsWith(store._internals.RESCUE_FILE)) throw new Error('盘满了');
+    return realOpen(f, ...rest);
+  };
+  try {
+    assert.throws(() => store.closeRoom(room), /存不进降级通道/);
+  } finally {
+    fs.openSync = realOpen;
+  }
+  assert.ok(store.getRoom(room.id), '抢救失败时房间必须留着');
+
+  const out = store.closeRoom(room);
+  assert.strictEqual(out.rescued, true);
+  const rescued = fs.readFileSync(path.join(dir, store._internals.RESCUE_FILE), 'utf8');
+  assert.ok(rescued.includes('不能丢的一句'));
+});
+
+test('5 个测试房间都没退出：空的、没人看的会自己让位', () => {
+  const store = freshStore(tmpDir('idle'));
+  const cap = store._internals.MAX_ROOMS;
+  const made = [];
+  for (let i = 0; i < cap; i++) made.push(store.createRoom(`测试${i}`));
+  // 都是 10 分钟前最后一次心跳、什么都没留下——正是那次事故的样子
+  const old = new Date(Date.now() - store._internals.IDLE_EMPTY_MS - 1000).toISOString();
+  made.forEach((r, i) => { r.playback.updatedAt = new Date(Date.parse(old) - i * 1000).toISOString(); });
+
+  const fresh = store.createRoom('真的要看的那部');
+  assert.ok(fresh.id, '应该能建房');
+  assert.strictEqual(store.listRooms().length, cap);
+  assert.strictEqual(store.getRoom(made[cap - 1].id), null, '让位的应该是最久没动静的那个');
+});
+
+test('正在看的房间（刚有心跳）不会被挤掉，哪怕它是空的', () => {
+  const store = freshStore(tmpDir('busy'));
+  const cap = store._internals.MAX_ROOMS;
+  for (let i = 0; i < cap; i++) {
+    const r = store.createRoom(`在看${i}`);
+    store.heartbeat(r, { state: 'playing', positionMs: 1000 });
+  }
+  const err = (() => { try { store.createRoom('第六部'); return null; } catch (e) { return e; } })();
+  assert.ok(err && err.status === 409);
+  assert.strictEqual(err.rooms.length, cap, '名额满了要把开着的房间带回去，好让人挑一个关');
+  assert.ok(err.rooms[0].id && err.rooms[0].title);
+});
+
+test('有内容的房间不会因为「空闲」被挤掉', () => {
+  const store = freshStore(tmpDir('content'));
+  const cap = store._internals.MAX_ROOMS;
+  const old = new Date(Date.now() - store._internals.IDLE_EMPTY_MS - 1000).toISOString();
+  for (let i = 0; i < cap; i++) {
+    const r = store.createRoom(`有弹幕${i}`);
+    store.addDanmaku(r, { text: '说过话' });
+    r.playback.updatedAt = old;
+  }
+  assert.throws(() => store.createRoom('第六部'), /都还开着/);
 });

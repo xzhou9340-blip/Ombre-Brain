@@ -50,6 +50,7 @@ const SNAPSHOT_INTERVAL_MS = 30 * 1000;
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
 const ROOM_TTL_MS = 12 * 60 * 60 * 1000;         // 12 小时无心跳即回收
 const FINISHED_GRACE_MS = 60 * 60 * 1000;        // 已结束的房间留多久才可被挤掉（等票根聊出来）
+const IDLE_EMPTY_MS = 10 * 60 * 1000;            // 空房间（什么都没留下）多久没心跳就可以让位
 const DISK_QUOTA_BYTES = 100 * 1024 * 1024;      // ferrideo 目录总配额
 const MIN_FREE_BYTES = 200 * 1024 * 1024;        // 整盘剩余低于此值：硬停写帧
 const FREE_SPACE_CACHE_MS = 10 * 1000;           // 剩余空间查询结果缓存
@@ -359,45 +360,103 @@ function rescue(room) {
   }
 }
 
+function hasContent(room) {
+  return Boolean(room.quotes.length || room.notes.length || room.danmaku.length);
+}
+
+function lastSeenMs(room) {
+  return new Date(room.playback.updatedAt).getTime();
+}
+
+/** 给大厅和 AI 看的房间摘要：不含字幕、不含帧。 */
+function roomSummary(room) {
+  return {
+    id: room.id,
+    title: room.title,
+    createdAt: room.createdAt,
+    lastSeenAt: room.playback.updatedAt,
+    state: room.playback.state,
+    positionMs: room.playback.positionMs,
+    finished: Boolean(room.finishedAt),
+    hasTicket: Boolean(room.ticket),
+    quoteCount: room.quotes.length,
+    noteCount: room.notes.length,
+    danmakuCount: room.danmaku.length,
+  };
+}
+
 /**
- * 名额满了先腾一个：只挤「已经散场的」房间，优先挤票根已生成的，
- * 其次挤散场超过一小时的。
+ * 关掉一个房间。
+ *
+ * 没出票根、但有摘录或笔记的房间：那些是她在电影里挑出来的句子。先抢救进
+ * 降级通道（python 侧排空成 letter），写不进去就**不关**——降级可以，丢失不行。
+ * 弹幕不抢救：弹幕是当场说的话，散了就散了；摘录和笔记才是留给记忆的。
+ */
+function closeRoom(room, why = '手动关闭') {
+  let rescued = false;
+  if (!room.ticket && (room.quotes.length || room.notes.length)) {
+    if (!rescue(room)) {
+      const err = new Error('这个房间里有摘录或笔记，但存不进降级通道，先不关它（免得丢东西）');
+      err.status = 500;
+      throw err;
+    }
+    rescued = true;
+  }
+  rooms.delete(room.id);
+  dirty.delete(room.id);
+  dropRoomFiles(room.id);
+  log(`关闭房间 ${room.id}「${room.title}」（${why}${rescued ? '，摘录/笔记已抢救' : ''}）`);
+  return { ok: true, roomId: room.id, title: room.title, rescued };
+}
+
+/**
+ * 名额满了先腾一个。按这个顺序找：
+ *   1. 已散场且票根已出——该留的都进记忆了
+ *   2. **空房间且 10 分钟没心跳**——什么都没留下、也没人在看。测试时开出来
+ *      又丢下的就是这种；之前没有这一条，5 个测试房间能把名额卡死 12 小时
+ *   3. 已散场超过一小时（有摘录/笔记就先抢救）
  *
  * 为什么不是散场就删：票根由 AI 事后调 ferrideo(action="ticket") 生成，
  * 里面的 mood/note 是聊出来的。散场即删 = 还没聊完就把摘录和笔记扔了。
- * 为什么不能不挤：一天看第六部片子就建不了房，等 12 小时 TTL 太荒唐。
+ * 正在看的房间（有心跳）永远不挤。
  */
-function evictOneFinished() {
+function evictOne() {
   const now = Date.now();
-  const finished = [...rooms.values()]
-    .filter((r) => r.finishedAt)
+  const all = [...rooms.values()];
+  const finished = all.filter((r) => r.finishedAt)
     .sort((a, b) => new Date(a.finishedAt) - new Date(b.finishedAt));
-  const victim = finished.find((r) => r.ticket)
-    || finished.find((r) => now - new Date(r.finishedAt).getTime() > FINISHED_GRACE_MS);
-  if (!victim) return false;
-  // 没出票根、但有摘录或笔记的房间：那些是她在电影里挑出来的句子。
-  // 先抢救进降级通道（python 侧排空成 letter），写不进去就**不删**——
-  // 宁可这次建房失败，也不能无声无息丢掉。
-  if (!victim.ticket && (victim.quotes.length || victim.notes.length)) {
-    if (!rescue(victim)) {
-      warn(`房间 ${victim.id} 有摘录/笔记但抢救失败，不淘汰它（宁可建房失败）`);
-      return false;
-    }
+  const idleEmpty = all
+    .filter((r) => !hasContent(r) && !r.ticket && now - lastSeenMs(r) > IDLE_EMPTY_MS)
+    .sort((a, b) => lastSeenMs(a) - lastSeenMs(b));
+
+  let victim = finished.find((r) => r.ticket);
+  let why = '名额满了，回收票根已出的房间';
+  if (!victim && idleEmpty.length) {
+    victim = idleEmpty[0];
+    why = '名额满了，回收没人在看的空房间';
   }
-  rooms.delete(victim.id);
-  dirty.delete(victim.id);
-  dropRoomFiles(victim.id);
-  log(`名额满了，回收已散场的房间 ${victim.id}「${victim.title}」（票根${victim.ticket ? '已生成' : '未生成但已过一小时'}）`);
-  return true;
+  if (!victim) {
+    victim = finished.find((r) => now - new Date(r.finishedAt).getTime() > FINISHED_GRACE_MS);
+    why = '名额满了，回收散场超过一小时的房间';
+  }
+  if (!victim) return false;
+  try {
+    closeRoom(victim, why);
+    return true;
+  } catch (e) {
+    warn(`房间 ${victim.id} 没能回收：${e.message}`);
+    return false;
+  }
 }
 
 function createRoom(title, wantedId) {
-  if (rooms.size >= MAX_ROOMS) evictOneFinished();
+  if (rooms.size >= MAX_ROOMS) evictOne();
   if (rooms.size >= MAX_ROOMS) {
     const err = new Error(
-      `同时最多 ${MAX_ROOMS} 个房间，而且没有已经散场的可以回收。先退出一场（调 /finish）再开`,
+      `同时最多 ${MAX_ROOMS} 个房间，现在都还开着。关掉一个不用的再开新的`,
     );
     err.status = 409;
+    err.rooms = listRooms().map(roomSummary);   // 让调用方能直接列出来让人挑
     throw err;
   }
   // wantedId：播放器在心跳 404 后重建同名房间用（R3）。房间号是 AI 手里的凭据，
@@ -669,13 +728,13 @@ module.exports = {
   createRoom, getRoom, listRooms,
   heartbeat, setSubtitle, addDanmaku, addQuote, addNote,
   requestFrame, saveFrame, readFrame, reportFailure, reportOrphanFailure,
-  finish, setTicket, evictOneFinished, rescue,
+  finish, setTicket, evictOne, closeRoom, roomSummary, rescue,
   stats,
   // 给测试和路由用的常量/内部件
   _internals: {
     rooms, dirty, newId, newRoomId, atomicWrite, dirSize, ID_ALPHABET,
     MAX_ROOMS, MAX_CUES, MAX_DANMAKU, MAX_FRAMES_PER_ROOM, MAX_FRAME_BYTES,
-    MAX_DANMAKU_ATTEMPTS, MAX_DANMAKU_TEXT, ROOM_TTL_MS, FINISHED_GRACE_MS,
+    MAX_DANMAKU_ATTEMPTS, MAX_DANMAKU_TEXT, ROOM_TTL_MS, FINISHED_GRACE_MS, IDLE_EMPTY_MS,
     DISK_QUOTA_BYTES, MIN_FREE_BYTES,
     frameDir, snapshotPath, RESCUE_FILE,
   },

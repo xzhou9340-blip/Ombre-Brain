@@ -149,6 +149,23 @@ function buildContext(room, includeFrame) {
   return out;
 }
 
+/** 房间列表里的一行：给 AI 看的人话时间，不含字幕、不含画面。 */
+function gateRoomSummary(room) {
+  const sum = store.roomSummary(room);
+  const idleSec = Math.max(0, Math.round((Date.now() - new Date(sum.lastSeenAt).getTime()) / 1000));
+  return {
+    roomId: sum.id,
+    title: sum.title,
+    position: hms(sum.positionMs),
+    idleMinutes: Math.round(idleSec / 60),
+    finished: sum.finished,
+    hasTicket: sum.hasTicket,
+    quoteCount: sum.quoteCount,
+    noteCount: sum.noteCount,
+    danmakuCount: sum.danmakuCount,
+  };
+}
+
 /** 房间全貌（6.6）：笔记、摘录、弹幕。不含字幕全文、不含帧的 base64。 */
 function buildRoomOverview(room) {
   return {
@@ -205,6 +222,11 @@ function createGateApp({ token }) {
     return gated(req, res, next);
   });
 
+  // 开着的房间（action="rooms"）。只有摘要，不含字幕、不含画面
+  gated.get('/api/gate/rooms', (req, res) => {
+    res.json({ rooms: store.listRooms().map(gateRoomSummary) });
+  });
+
   // 建房（action="create_room"）
   gated.post('/api/gate/rooms', (req, res) => {
     try {
@@ -214,6 +236,18 @@ function createGateApp({ token }) {
         title: room.title,
         tip: `房间号 ${room.id}，在 iPad 上输入这个号`,
       });
+    } catch (e) {
+      return res.status(e.status || 500).json({
+        error: e.message,
+        rooms: (e.rooms ? store.listRooms() : []).map(gateRoomSummary),
+      });
+    }
+  });
+
+  // 关掉一个房间（action="close"）
+  gated.post('/api/gate/rooms/:id/close', withRoom, (req, res) => {
+    try {
+      return res.json(store.closeRoom(req.room, 'AI 按她的意思关掉'));
     } catch (e) {
       return fail(res, e.status || 500, e.message);
     }
