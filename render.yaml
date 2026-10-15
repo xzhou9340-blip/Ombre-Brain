@@ -61,6 +61,13 @@ services:
         sync: false          # speak 工具用；ElevenLabs TTS key，在 Dashboard 填
       - key: ELEVENLABS_VOICE_ID
         sync: false          # speak 工具用；克的 voice id
+      # ferrideo（观影）内嵌子进程相关——全部可留空走默认：
+      #   FERRIDEO_WEB_TOKEN     不设则首启自动生成并持久化到盘（<盘>/ferrideo/.web-token）
+      #   FERRIDEO_INTERNAL_PORT 默认 18005（127.0.0.1 内部端口，不对外；18004 是 read-along）
+      #   FERRIDEO_DATA_DIR      默认 <盘>/ferrideo（帧 + 房间快照）
+      # 磁盘配额：ferrideo 整个目录**上限 100 MB**，且写帧前查整盘剩余，
+      # 低于 200 MB 硬停（不是降级）。这块盘只有 1G，上面还有 _app/——
+      # 盘满了坏的不是 ferrideo，是 ombre 改不动也回滚不了。
       # read-along（共读）内嵌子进程相关——全部可留空走默认：
       #   READING_WEB_TOKEN     不设则首启自动生成并持久化到盘（<盘>/read-along/.web-token）
       #   READING_INTERNAL_PORT 默认 18004（127.0.0.1 内部端口，不对外）

@@ -75,6 +75,7 @@ from tools import plan as _t_plan
 from tools import dream as _t_dream
 from tools import i as _t_i
 from tools.reading import core as _t_reading
+from tools.ferrideo import core as _t_ferrideo
 from tools import bark as _t_bark
 from tools import phone_activity as _t_phone
 from tools import speak as _t_speak
@@ -315,6 +316,44 @@ def _restart_github_auto_task(interval_minutes: int) -> None:
 _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 
 
+def apply_connector_instructions() -> int:
+    """把连接器说明里的 __TOOL_COUNT__ / __MAX_RESULTS__ 按**实际注册的工具数**填上。
+
+    返回填进去的工具数；0 表示没填成（说明里会留着占位符，比写错数字好发现）。
+
+    为什么不写死数字：0326e6f 修过一次「tool_search 默认只回 5 个、被截断导致
+    找不到工具」，当时把数字写进了说明。写死就是把同一颗雷往后埋——以后加一个
+    工具就得有人记得回来改这两处，而没人会记得。max_results 给「工具数 + 10」
+    的余量，再加几个工具也不用动这里。
+
+    数的是 mcp 与 mcp_extra 两个实例的**并集减去 _DISABLED_TOOLS**：
+    - 取并集，所以跟「回灌之前还是之后调」无关（只数主实例的话，回灌前会报 5）
+    - 减掉被摘除的，因为 iter 2.3 瘦身只从 mcp 里 del、它们还留在 mcp_extra 里，
+      不减就会把已经不对外暴露的工具算进数字
+    两头都防住之后，这个数字跟启动顺序和瘦身名单都解耦了。
+
+    FastMCP.instructions 是只读属性，真值在 _mcp_server 上，而 lowlevel Server
+    要到 initialize 才读它——所以启动期改还来得及，客户端握手拿到的就是填好的。
+    """
+    try:
+        names = (
+            set(mcp._tool_manager._tools) | set(mcp_extra._tool_manager._tools)
+        ) - set(_DISABLED_TOOLS)
+        n = len(names)
+        if not n:
+            return 0
+        mcp._mcp_server.instructions = (
+            OMBRE_CONNECTOR_INSTRUCTIONS
+            .replace("__TOOL_COUNT__", str(n))
+            .replace("__MAX_RESULTS__", str(n + 10))
+        )
+        logger.info(f"连接器说明已按实际工具数填好：{n} 个，建议 max_results={n + 10}")
+        return n
+    except Exception as e:  # noqa: BLE001 — 填不上也不该拦住启动
+        logger.warning(f"连接器说明填数失败，占位符会原样留在说明里：{e}")
+        return 0
+
+
 # --- Create MCP server instance / 创建 MCP 服务器实例 ---
 # host="0.0.0.0" so Docker container's SSE is externally reachable
 # stdio mode ignores host (no network)
@@ -331,11 +370,16 @@ _gh_auto_interval: int = int(_gh_cfg.get("auto_interval_minutes") or 0)
 # 或者换了个客户端，模型就只剩一堆工具名，于是「什么都不自己查、张口就问」。
 # 这里放的是**没有项目说明时也必须成立的最小契约**：先拿全工具、能查的不要问。
 # 完整版仍在 docs/CLAUDE_PROMPT.md，两处改动要同步。
+#
+# __TOOL_COUNT__ / __MAX_RESULTS__ 是占位符，在
+# 工具全部注册完之后按**实际数量**填上。不写死数字的理由：0326e6f 修过一次
+# 「tool_search 被截断导致找不到工具」，而写死就是把同一颗雷往后埋——
+# 加一个工具就得有人记得回来改这两处，没人会记得。
 OMBRE_CONNECTOR_INSTRUCTIONS = """Ombre Brain 是你的大脑：跨会话的记忆，以及她此刻/近几天的实况。
 
 【一】取工具：max_results 要给够
-工具延迟加载，搜索默认只回 5 个，而这里有 14 个——「找不到 breath/hold」是被截断，不是没搜到：
-tool_search(query="ombre 记忆 breath hold peek diary phone reading", max_results=20)
+工具延迟加载，搜索默认只回 5 个，而这里有 __TOOL_COUNT__ 个——「找不到 breath/hold」是被截断，不是没搜到：
+tool_search(query="ombre 记忆 breath hold peek diary phone reading ferrideo", max_results=__MAX_RESULTS__)
 还要 speak/pulse/letter 就把词加进 query 再取一次。
 别用 select: 按名精取——真名带连接器前缀（mcp__ombre__breath），写 select:breath 必空手。
 空手了就把缺的工具名加进上面那行重取，不要换措辞反复搜。
@@ -1120,6 +1164,91 @@ async def reading_annotations(
     )
 
 
+# =============================================================
+# 观影（ferrideo）工具组 —— 实现见 tools/ferrideo/core.py
+# ferrideo 是本服务里的 node 子进程（web/ferrideo_bridge.py 托管）。
+# 这些工具只连它的**门禁端口**（127.0.0.1:18006）：播放器那套能取字幕全文的
+# 路由压根不在那个端口上，所以防剧透是结构上成立的，不靠调用方自觉。
+# 播放器走 /ferrideo/<token>/* 反向代理。部署见 ferrideo/README.md。
+# =============================================================
+async def ferrideo_create_room(title: Optional[str] = "") -> str:
+    """【一起看电影 开一场 看片 观影 陪我看】开一场观影。title=片名(可留空)。返回房间号和她要在 iPad 上打开的地址——把这两样原样告诉她。她进去之后选本机视频文件(字幕可选)就能开始;视频只存在她自己设备上,不上传。同时最多 5 个房间。"""
+    return await _with_notice(
+        _t_ferrideo.create_room(title=title or ""),
+        op="ferrideo_create_room",
+        args={"title": title},
+    )
+
+
+async def ferrideo_get_context(room_id: str, include_frame: Optional[bool] = None):
+    """【她看到哪了 现在哪一句 这一段讲什么 看一眼画面 跟上进度】读这一场的现场:放到第几分钟、当前这句台词、前三句、要不要带一帧画面。include_frame=True 时附上最近一帧(image content block,你能直接看到);没有字幕轨时默认带帧,因为那时画面是唯一的上下文来源。
+    **播放头之后的台词你永远拿不到**——门禁在服务端,不是约定,别试别的工具也别去搜这部片的剧情。返回里 staleSeconds 大说明她不在前台(切出去或锁屏了),那些数字是那一刻的、不是现在的。"""
+    from mcp.server.fastmcp.utilities.types import Image as _MCPImage
+    from mcp.types import TextContent as _TextContent
+    _log_op_entry("ferrideo_get_context", {"room_id": room_id, "include_frame": include_frame})
+    try:
+        text, frame = await _t_ferrideo.get_context(room_id=room_id, include_frame=include_frame)
+    except Exception as e:
+        _log_op_err("ferrideo_get_context", e)
+        return "读现场失败：" + str(e)
+    if not frame:
+        _log_op_ok("ferrideo_get_context", "text-only")
+        return text
+    # 帧走 image content block，不塞进文字：一张 200KB 的图编成 base64
+    # 是 27 万个字符，塞文字等于把上下文烧光
+    _log_op_ok("ferrideo_get_context", f"image-{len(frame)}b")
+    return [_TextContent(type="text", text=text), _MCPImage(data=frame, format="jpeg").to_image_content()]
+
+
+async def ferrideo_send_danmaku(room_id: str, text: str, author: Optional[str] = "") -> str:
+    """【发弹幕 说一句 吐槽 在画面上说话】往她的画面上发一条弹幕,3 秒内从右边飘过去。text 上限 60 字(超了截断)——弹幕是飘过去的,写短、写当下,别写影评。author 默认"克"。她不在前台时会等她回来再上屏,不会丢。"""
+    return await _with_notice(
+        _t_ferrideo.send_danmaku(room_id=room_id, text=text, author=author or ""),
+        op="ferrideo_send_danmaku",
+        args={"room_id": room_id, "text_len": len(text or ""), "author": author},
+    )
+
+
+async def ferrideo_request_frame(room_id: str) -> str:
+    """【看画面 抓一帧 现在屏幕上是什么 让我看看】跟播放器要一帧当前画面。**这是异步的**:本工具立刻返回,帧由播放器在下一次心跳(最多 3 秒)时送上来,所以等 3-5 秒再用 ferrideo_get_context 带 include_frame=True 取。没有字幕轨的那一场,这是你唯一能知道画面内容的办法。"""
+    return await _with_notice(
+        _t_ferrideo.request_frame(room_id=room_id),
+        op="ferrideo_request_frame",
+        args={"room_id": room_id},
+    )
+
+
+async def ferrideo_add_note(room_id: str, text: str) -> str:
+    """【记一笔 写下来 这里要记住 留个笔记】在这一场里记一笔,自动绑当前播放时间。写给之后的自己看的——票根会带上它。跟弹幕的区别:弹幕是说给她听的,笔记是留给记忆的,她在画面上看不到。"""
+    return await _with_notice(
+        _t_ferrideo.add_note(room_id=room_id, text=text),
+        op="ferrideo_add_note",
+        args={"room_id": room_id, "text_len": len(text or "")},
+    )
+
+
+async def ferrideo_get_room(room_id: str) -> str:
+    """【这一场都有什么 回顾 她记了哪些 看过的弹幕】看这一场的全貌:她记下的台词、你写的笔记、说过的所有弹幕。散场之后要出票根前先调它。不返回字幕全文,也不返回画面。"""
+    return await _with_notice(
+        _t_ferrideo.get_room(room_id=room_id),
+        op="ferrideo_get_room",
+        args={"room_id": room_id},
+    )
+
+
+async def ferrideo_generate_ticket(
+    room_id: str,
+    mood: Optional[str] = "",
+    note: Optional[str] = "",
+) -> str:
+    """【出票根 存下这一场 看完了 收尾】这一场看完之后出一张票根,并**直接存成一条 #观影 记忆**(跳过打标、绝不与旧桶合并——每一场是独立的一条)。mood=那一晚的感觉,note=附言;这两样是聊出来的,所以票根只能由你调,退出按钮不会自动生成。入库失败时会走 letter 降级并明说,票根不会丢。先用 ferrideo_get_room 看一眼这一场留下了什么再出票根。"""
+    return await _with_notice(
+        _t_ferrideo.generate_ticket(room_id=room_id, mood=mood or "", note=note or ""),
+        op="ferrideo_generate_ticket",
+        args={"room_id": room_id, "mood": mood, "note_len": len(note or "")},
+    )
+
+
 @mcp.tool()
 async def reading(
     action: str,
@@ -1158,6 +1287,54 @@ async def reading(
         f"未知 action: {action!r}。reading 可选: "
         "progress(进度/书架) / text(回看原文) / search(全文检索) / "
         "annotate(划线批注) / annotations(看批注·回批注)"
+    )
+
+
+@mcp_extra.tool()
+async def ferrideo(
+    action: str,
+    room_id: Optional[str] = "",
+    title: Optional[str] = "",
+    text: Optional[str] = "",
+    author: Optional[str] = "",
+    include_frame: Optional[bool] = None,
+    mood: Optional[str] = "",
+    note: Optional[str] = "",
+):
+    """【一起看电影 陪我看 观影 看片 她看到哪了 现在哪一句 发弹幕 吐槽 看一眼画面 抓一帧 出票根 看完了】观影(ferrideo)入口,action 必填,七选一。她在 iPad 上放本机视频,你在这头跟着看同一场。服务端有防剧透门禁:**播放头之后的台词你永远拿不到**——别绕,也别去网上搜这部片的剧情。
+
+    action="create_room" —— 开一场。title=片名(可留空)。返回房间号和她要在 iPad 上打开的地址,把这两样原样告诉她。同时最多 5 个房间。
+
+    action="context" —— **最常用的一个。** 读现场:放到第几分钟、当前这句台词、前三句。room_id 必填;include_frame=True 时附上最近一帧画面(你能直接看到);没有字幕轨的那一场默认带帧,因为画面是唯一的上下文来源。返回里 staleSeconds 大说明她不在前台(切出去或锁屏了),那些数字是那一刻的、不是现在的。
+
+    action="danmaku" —— 往她画面上发一条弹幕,3 秒内从右边飘过去。room_id 必填;text 上限 60 字(超了截断,弹幕是飘过去的,写短、写当下,别写影评);author 默认"克"。她不在前台时会等她回来再上屏,不会丢。
+
+    action="frame" —— 跟播放器要一帧当前画面。room_id 必填。**这是异步的**:本工具立刻返回,帧由播放器在下一次心跳(最多 3 秒)时送上来,所以等 3-5 秒再用 action="context" 带 include_frame=True 取。
+
+    action="note" —— 记一笔,自动绑当前播放时间。room_id 必填;text=内容。跟弹幕的区别:弹幕是说给她听的,笔记是留给记忆的,她在画面上看不到。票根会带上它。
+
+    action="room" —— 这一场的全貌:她记下的台词、你写的笔记、说过的所有弹幕。room_id 必填。出票根之前先看一眼。
+
+    action="ticket" —— 看完之后出一张票根,并**直接存成一条 #观影 记忆**(跳过打标、绝不与旧桶合并——每一场是独立的一条)。room_id 必填;mood=那一晚的感觉,note=附言。这两样是聊出来的,所以票根只能由你调,她那边的退出按钮不会自动生成。
+    """
+    if action == "create_room":
+        return await ferrideo_create_room(title=title or "")
+    if action == "context":
+        return await ferrideo_get_context(room_id=room_id or "", include_frame=include_frame)
+    if action == "danmaku":
+        return await ferrideo_send_danmaku(room_id=room_id or "", text=text or "", author=author or "")
+    if action == "frame":
+        return await ferrideo_request_frame(room_id=room_id or "")
+    if action == "note":
+        return await ferrideo_add_note(room_id=room_id or "", text=text or "")
+    if action == "room":
+        return await ferrideo_get_room(room_id=room_id or "")
+    if action == "ticket":
+        return await ferrideo_generate_ticket(room_id=room_id or "", mood=mood or "", note=note or "")
+    return (
+        f"未知 action: {action!r}。ferrideo 可选: "
+        "create_room(开一场) / context(现在哪一句·可带画面) / danmaku(发弹幕) / "
+        "frame(要一帧) / note(记一笔) / room(这一场全貌) / ticket(出票根)"
     )
 
 
@@ -1313,6 +1490,10 @@ if __name__ == "__main__":
         except Exception as _del_exc:  # noqa: BLE001 — 摘不掉就继续暴露，绝不挡启动
             logger.warning(f"摘除工具 {_dead} 失败，它仍会对外暴露：{_del_exc}")
 
+    # 该摘的摘完了，再把说明里的占位符按**实际对外暴露**的数量填上。
+    # 顺序要紧：填在摘除之前的话，数字会把 night_fall/anchor/release 算进去。
+    apply_connector_instructions()
+
     if transport in ("sse", "streamable-http"):
         import threading
         import uvicorn
@@ -1383,6 +1564,13 @@ if __name__ == "__main__":
                         await _reading_bridge.ensure_child_on_boot()
                     except Exception as _rb_exc:
                         logger.warning(f"reading child boot failed: {_rb_exc}")
+                    # ferrideo 观影后端：同形态的 node 子进程（127.0.0.1:18005 +
+                    # 持久盘子目录）。三个住户里最不重要的一个——起不来只降级。
+                    try:
+                        from web import ferrideo_bridge as _ferrideo_bridge
+                        await _ferrideo_bridge.ensure_child_on_boot()
+                    except Exception as _fb_exc:
+                        logger.warning(f"ferrideo child boot failed: {_fb_exc}")
                     # #4a ②：启动成功（app 已初始化、引擎已起、即将开始服务）→ 清零 entrypoint
                     # 的崩溃计数 .boot_fails。崩在这之前（import/init）= 启动失败，计数保留，
                     # 连续失败由 entrypoint 回滚到 _prev。只在「从持久卷 CODE_DIR 跑」时存在该文件。
@@ -1409,6 +1597,11 @@ if __name__ == "__main__":
                     try:
                         from web import reading_bridge as _reading_bridge
                         await _reading_bridge.stop_child()
+                    except Exception:
+                        pass
+                    try:
+                        from web import ferrideo_bridge as _ferrideo_bridge
+                        await _ferrideo_bridge.stop_child()
                     except Exception:
                         pass
                     _stop_tunnel()

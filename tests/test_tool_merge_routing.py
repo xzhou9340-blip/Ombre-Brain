@@ -4,9 +4,11 @@
 # 24 个工具让客户端的 tool_search 挑不准：搜索默认只回 5 个，一多半被截断，
 # 「找不到 breath/hold」就是这么来的。修法是把同域工具收成一个带 action 的
 # 入口：diary / letter / reading / speak，对外从 24 降到 14。
+# ferrideo（观影）后来按同一条规矩进来，7 个 ferrideo_* 收成一个带 action 的
+# 入口，对外 14 → 15。不这么做的话光它一个就把工具面顶回 21。
 #
 # 这里钉住的是**合并没有丢功能**：
-#   ① 对外暴露的正好是那 14 个（多一个少一个都算回退）
+#   ① 对外暴露的正好是那 15 个（多一个少一个都算回退）
 #   ② 每条 action 落到原来那个薄壳函数上，参数一字不改地透传
 #   ③ 被摘掉的 anchor / release 只是不注册，函数还在，随时能回退
 #   ④ 未知 action 有明确回话，不是静默失败
@@ -29,8 +31,8 @@ EXPOSED = {
     # 原样不动的 10 个
     "breath", "hold", "grow", "trace", "dream", "plan", "pulse", "I",
     "peek", "phone_activity_query",
-    # 合并出来的 4 个
-    "diary", "letter", "reading", "speak",
+    # 合并出来的 5 个
+    "diary", "letter", "reading", "speak", "ferrideo",
 }
 
 
@@ -65,6 +67,9 @@ def test_disabled_tools_keep_their_code():
     "reading_progress", "reading_text", "reading_search",
     "reading_annotate", "reading_annotations",
     "bark_push", "_speak_voice",
+    "ferrideo_create_room", "ferrideo_get_context", "ferrideo_send_danmaku",
+    "ferrideo_request_frame", "ferrideo_add_note", "ferrideo_get_room",
+    "ferrideo_generate_ticket",
 ])
 def test_merged_shells_still_exist(shell):
     """合并入口调的就是这些薄壳，_with_notice 的通知/日志全靠它们带着。"""
@@ -92,7 +97,11 @@ def probes(monkeypatch):
     for name in ("diary_read", "diary_write", "letter_read", "letter_write",
                  "reading_progress", "reading_text", "reading_search",
                  "reading_annotate", "reading_annotations",
-                 "bark_push", "_speak_voice"):
+                 "bark_push", "_speak_voice",
+                 "ferrideo_create_room", "ferrideo_get_context",
+                 "ferrideo_send_danmaku", "ferrideo_request_frame",
+                 "ferrideo_add_note", "ferrideo_get_room",
+                 "ferrideo_generate_ticket"):
         monkeypatch.setattr(s, name, _probe(name))
     return calls
 
@@ -208,3 +217,51 @@ async def test_unknown_action_says_what_is_available(tool, valid, probes):
     assert "未知 action" in out
     assert valid in out
     assert not probes, "未知 action 不该调到任何薄壳"
+
+
+# ------------------------------------------------------------
+# ferrideo（观影）七条 action
+# ------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ferrideo_routes_all_seven_actions(probes):
+    assert await s.ferrideo(action="create_room", title="花样年华") == "<ferrideo_create_room>"
+    assert probes[-1] == ("ferrideo_create_room", {"title": "花样年华"})
+
+    await s.ferrideo(action="context", room_id="K7X2M9", include_frame=True)
+    assert probes[-1] == ("ferrideo_get_context", {"room_id": "K7X2M9", "include_frame": True})
+
+    await s.ferrideo(action="danmaku", room_id="K7X2M9", text="她要哭了", author="克")
+    assert probes[-1] == ("ferrideo_send_danmaku", {"room_id": "K7X2M9", "text": "她要哭了", "author": "克"})
+
+    await s.ferrideo(action="frame", room_id="K7X2M9")
+    assert probes[-1] == ("ferrideo_request_frame", {"room_id": "K7X2M9"})
+
+    await s.ferrideo(action="note", room_id="K7X2M9", text="她一直没回头")
+    assert probes[-1] == ("ferrideo_add_note", {"room_id": "K7X2M9", "text": "她一直没回头"})
+
+    await s.ferrideo(action="room", room_id="K7X2M9")
+    assert probes[-1] == ("ferrideo_get_room", {"room_id": "K7X2M9"})
+
+    await s.ferrideo(action="ticket", room_id="K7X2M9", mood="安静", note="看完没说话")
+    assert probes[-1] == ("ferrideo_generate_ticket", {"room_id": "K7X2M9", "mood": "安静", "note": "看完没说话"})
+
+
+@pytest.mark.asyncio
+async def test_ferrideo_include_frame_keeps_none(probes):
+    """include_frame 的三态要保住：None≠False。
+    没字幕的那一场默认带帧就是靠 None 走到服务端默认值的。"""
+    await s.ferrideo(action="context", room_id="K7X2M9")
+    assert probes[-1][1]["include_frame"] is None
+
+    await s.ferrideo(action="context", room_id="K7X2M9", include_frame=False)
+    assert probes[-1][1]["include_frame"] is False
+
+
+@pytest.mark.asyncio
+async def test_ferrideo_unknown_action_lists_the_seven(probes):
+    out = await s.ferrideo(action="play")
+    assert "未知 action" in out
+    for a in ("create_room", "context", "danmaku", "frame", "note", "room", "ticket"):
+        assert a in out
+    assert not probes, "未知 action 不该落到任何薄壳上"

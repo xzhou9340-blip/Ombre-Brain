@@ -43,6 +43,10 @@ deploy/
 # read-along：源码要进镜像（子进程），但依赖构建期现装、数据在持久盘
 read-along/node_modules/
 read-along/data/
+
+# ferrideo：同上，源码进镜像，依赖构建期现装、数据在持久盘
+ferrideo/node_modules/
+ferrideo/data/
 *.md
 
 # 日志与临时文件

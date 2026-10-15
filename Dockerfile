@@ -43,6 +43,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY read-along/package.json read-along/package-lock.json ./read-along/
 RUN cd read-along && npm install --omit=dev && npm cache clean --force
 
+# ferrideo（观影后端）的 node 依赖同理（见 src/web/ferrideo_bridge.py）。
+# 只有 express 一个依赖；express 5 要求 Node ≥ 18，与上面装的 18.x 相符。
+COPY ferrideo/package.json ferrideo/package-lock.json ./ferrideo/
+RUN cd ferrideo && npm install --omit=dev && npm cache clean --force
+
 # Copy project files / 复制项目文件
 COPY src/ ./src/
 COPY frontend/ ./frontend/
@@ -50,6 +55,10 @@ COPY tools/ ./tools/
 # read-along 代码（node_modules 已在上面装好，.dockerignore 排除了本地的
 # node_modules/ 与 data/，COPY 是合并语义、不会覆盖掉装好的依赖）
 COPY read-along/ ./read-along/
+# ferrideo 代码（同上：node_modules 已装好，COPY 是合并语义）。
+# 注意播放器页面不在这里——它在 frontend/ferrideo/index.html，随
+# src/+frontend/ 的热更新走，改页面不用重建镜像。
+COPY ferrideo/ ./ferrideo/
 COPY VERSION ./VERSION
 COPY config.example.yaml ./config.default.yaml
 COPY entrypoint.sh ./entrypoint.sh

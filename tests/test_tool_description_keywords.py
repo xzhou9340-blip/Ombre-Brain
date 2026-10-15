@@ -68,16 +68,19 @@ def _docstrings() -> dict[str, str]:
 DECORATED = {
     "breath", "hold", "grow", "trace", "dream",
     "peek", "phone_activity_query", "pulse", "plan", "I",
-    "anchor", "release",                      # 装饰器留着，启动时才摘
-    "diary", "letter", "reading", "speak",    # 4 个合并入口
+    "anchor", "release",                                  # 装饰器留着，启动时才摘
+    "diary", "letter", "reading", "speak", "ferrideo",    # 5 个合并入口
 }
-# 合并进上面 4 个入口、不再单独注册的薄壳
+# 合并进上面 5 个入口、不再单独注册的薄壳
 MERGED_AWAY = {
     "diary_read", "diary_write",
     "letter_read", "letter_write",
     "reading_progress", "reading_text", "reading_search",
     "reading_annotate", "reading_annotations",
     "bark_push",
+    "ferrideo_create_room", "ferrideo_get_context", "ferrideo_send_danmaku",
+    "ferrideo_request_frame", "ferrideo_add_note", "ferrideo_get_room",
+    "ferrideo_generate_ticket",
 }
 
 
