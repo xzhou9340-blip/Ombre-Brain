@@ -68,6 +68,7 @@ def bridge_env(monkeypatch, tmp_path):
     port = _free_port()
     monkeypatch.setenv("FERRIDEO_DATA_DIR", str(tmp_path / "fdata"))
     monkeypatch.setenv("FERRIDEO_INTERNAL_PORT", str(port))
+    monkeypatch.setenv("FERRIDEO_GATE_PORT", str(_free_port()))
     monkeypatch.delenv("FERRIDEO_WEB_TOKEN", raising=False)
     monkeypatch.delenv("FERRIDEO_APP_DIR", raising=False)
     # 反面用例：父进程环境里有 PORT（线上 Render 就是这样），子进程必须剔除
@@ -78,6 +79,7 @@ def bridge_env(monkeypatch, tmp_path):
     bridge._managed = False
     bridge._last_spawn_error = ""
     bridge._proxy_client = None
+    bridge._ready_task = None
     yield port
 
 
@@ -385,3 +387,106 @@ async def test_embedded_end_to_end(bridge_env, monkeypatch, tmp_path):
     finally:
         await bridge.stop_child()
     assert not bridge.status()["running"]
+
+
+# ============================================================
+# 就绪探测：Render 日志里要看得到「真的就绪了」和「为什么没就绪」
+# ------------------------------------------------------------
+# 子进程的输出全部进了盘上的 ferrideo-server.log，Render 面板里看不到。
+# 之前那里只有一行「子进程已启动」——只说明 Popen 成功，不说明 node 跑起来了，
+# 排查只能靠「没看到报错」去推断。这三条钉住：就绪要明说；起不来要把
+# 子进程自己的话搬到 ombre 日志里。
+# ============================================================
+async def _wait_ready_task(timeout: float = 25.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        t = bridge._ready_task
+        if t is not None and t.done():
+            return t.result()
+        await asyncio.sleep(0.2)
+    raise AssertionError("就绪探测没在时限内结束")
+
+
+@pytest.mark.skipif(not (HAS_NODE and HAS_DEPS), reason="需要 node 与 ferrideo/node_modules")
+@pytest.mark.asyncio
+async def test_ready_line_reaches_ombre_log(bridge_env, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="ombre_brain")
+    await bridge.ensure_child_on_boot()
+    try:
+        assert await _wait_ready_task() is True
+        ready = [r.getMessage() for r in caplog.records if "子进程就绪" in r.getMessage()]
+        assert ready, "就绪了却没在 ombre 日志里说"
+        assert "播放器" in ready[0] and "门禁" in ready[0] and "✓" in ready[0]
+    finally:
+        await bridge.stop_child()
+
+
+@pytest.mark.skipif(not (HAS_NODE and HAS_DEPS), reason="需要 node 与 ferrideo/node_modules")
+@pytest.mark.asyncio
+async def test_bad_token_reason_reaches_ombre_log(bridge_env, monkeypatch, caplog):
+    """最可能的线上配置错误：Render 面板里 token 填了非法字符。
+    node 会拒绝启动——这句话必须出现在 Render 能看到的日志里。"""
+    import logging
+    caplog.set_level(logging.INFO, logger="ombre_brain")
+    monkeypatch.setenv("FERRIDEO_WEB_TOKEN", "has space!")
+    await bridge.ensure_child_on_boot()
+    try:
+        deadline = time.monotonic() + 10
+        hit = []
+        while time.monotonic() < deadline and not hit:
+            hit = [r.getMessage() for r in caplog.records if "子进程退出" in r.getMessage()]
+            await asyncio.sleep(0.2)
+        assert hit, "子进程退出了却没在 ombre 日志里报"
+        assert "拒绝启动" in hit[0], f"没把子进程自己的原因带过来：{hit[0]}"
+        assert not any("子进程就绪" in r.getMessage() for r in caplog.records)
+    finally:
+        await bridge.stop_child()
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="需要 node")
+@pytest.mark.asyncio
+async def test_broken_code_reason_reaches_ombre_log(bridge_env, monkeypatch, tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="ombre_brain")
+    broken = tmp_path / "broken_ferrideo"
+    broken.mkdir()
+    (broken / "server.js").write_text("这不是 JavaScript {{{", encoding="utf-8")
+    monkeypatch.setenv("FERRIDEO_APP_DIR", str(broken))
+    await bridge.ensure_child_on_boot()
+    try:
+        deadline = time.monotonic() + 10
+        hit = []
+        while time.monotonic() < deadline and not hit:
+            hit = [r.getMessage() for r in caplog.records if "子进程退出" in r.getMessage()]
+            await asyncio.sleep(0.2)
+        assert hit and "SyntaxError" in hit[0], f"没把语法错误带过来：{hit[:1]}"
+        # 秒退时只报一次（监控循环说），就绪探测不重复说
+        assert not any("没有就绪" in r.getMessage() for r in caplog.records)
+    finally:
+        await bridge.stop_child()
+
+
+def test_log_tail_skips_stack_frames(bridge_env):
+    """node 崩溃时原因在栈上面。只截最后几行会把原因截掉、留下一堆 at ...。"""
+    os.makedirs(bridge.data_dir(), exist_ok=True)
+    with open(bridge._child_log_path(), "w", encoding="utf-8") as f:
+        f.write("/app/ferrideo/server.js:1\n这不是 JavaScript {{{\n^^^^\n\n"
+                "SyntaxError: Unexpected identifier\n")
+        for i in range(10):
+            f.write(f"    at Function.frame{i} (node:internal/x:{i}:1)\n")
+        f.write("\nNode.js v18.13.0\n")
+    tail = bridge._child_log_tail()
+    assert "SyntaxError: Unexpected identifier" in tail
+    assert "at Function" not in tail and "Node.js v" not in tail
+
+
+def test_log_tail_is_one_line_and_bounded(bridge_env):
+    os.makedirs(bridge.data_dir(), exist_ok=True)
+    with open(bridge._child_log_path(), "w", encoding="utf-8") as f:
+        for i in range(50):
+            f.write(f"第{i}行\n")
+    tail = bridge._child_log_tail()
+    assert "\n" not in tail, "要能塞进一行日志"
+    assert "第49行" in tail and "第0行" not in tail
+    assert tail.count("|") == bridge._LOG_TAIL_LINES - 1
